@@ -122,12 +122,21 @@ async function startServer() {
       service: "hanviet-lexicon",
       uptime: Math.floor(process.uptime()),
       timestamp: new Date().toISOString(),
-      geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      geminiConfigured: Boolean(resolveGeminiApiKey()),
+    });
+  });
+
+  // Runtime environment fallback endpoint for hybrid Coolify deployments
+  app.get("/api/runtime-env", (_req, res) => {
+    const key = resolveGeminiApiKey();
+    res.status(200).json({
+      geminiConfigured: Boolean(key && key !== "MY_GEMINI_API_KEY"),
+      geminiApiKey: key && key !== "MY_GEMINI_API_KEY" ? key : "",
     });
   });
 
   // 1. Endpoint: Analyze Korean vocabulary & generate 2 bilingual Korean-Vietnamese example sentences
-  app.post("/api/vocabulary/analyze", async (req, res) => {
+  app.post(["/api/vocabulary/analyze", "/vocabulary/analyze"], async (req, res) => {
     try {
       const { word, contextStyle = "daily" } = req.body || {};
       if (!word || typeof word !== "string" || !word.trim()) {
@@ -332,7 +341,7 @@ Yêu cầu BẮT BUỘC:
   });
 
   // 2. Endpoint: Evaluate learner's practice sentence with the target Korean word
-  app.post("/api/vocabulary/check-sentence", async (req, res) => {
+  app.post(["/api/vocabulary/check-sentence", "/vocabulary/check-sentence"], async (req, res) => {
     try {
       const { targetWord, userSentence } = req.body || {};
       if (!targetWord || !userSentence || !userSentence.trim()) {
@@ -392,7 +401,7 @@ Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ
   });
 
   // 3. Endpoint: Korean Speech Synthesis using Gemini TTS (gemini-3.8-flash-lite-tts)
-  app.post("/api/vocabulary/tts", async (req, res) => {
+  app.post(["/api/vocabulary/tts", "/vocabulary/tts"], async (req, res) => {
     try {
       const { text } = req.body || {};
       if (!text || typeof text !== "string" || !text.trim()) {
@@ -443,7 +452,7 @@ Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ
   });
 
   // 4. Endpoint: Deep AI explanation & memory tip for a selected card in the 10-word Elimination Game
-  app.post("/api/vocabulary/explain-card", async (req, res) => {
+  app.post(["/api/vocabulary/explain-card", "/vocabulary/explain-card"], async (req, res) => {
     try {
       const { koreanWord, vietnameseMeaning = "" } = req.body || {};
       if (!koreanWord || typeof koreanWord !== "string" || !koreanWord.trim()) {
@@ -488,7 +497,7 @@ Hãy cung cấp:
   });
 
   // 5. Endpoint: Generate a thematic deck of Korean-Vietnamese vocabulary words (up to 5-10 words) via Gemini AI
-  app.post("/api/vocabulary/generate-deck", async (req, res) => {
+  app.post(["/api/vocabulary/generate-deck", "/vocabulary/generate-deck"], async (req, res) => {
     try {
       const { topic, count = 5 } = req.body || {};
       if (!topic || typeof topic !== "string" || !topic.trim()) {
@@ -609,6 +618,13 @@ Mỗi từ vựng phải có đầy đủ: koreanWord, romanization, vietnameseP
         error instanceof Error ? error.message : "Không thể tạo bộ từ vựng với Gemini AI.";
       return res.status(500).json({ error: msg });
     }
+  });
+
+  // Ensure any unmatched /api/* route always returns valid JSON (never HTML 404)
+  app.all("/api/*", (req, res) => {
+    res.status(404).json({
+      error: `Không tìm thấy API endpoint: ${req.method} ${req.originalUrl}`,
+    });
   });
 
   if (process.env.NODE_ENV !== "production") {

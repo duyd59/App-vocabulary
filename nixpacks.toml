@@ -12,4 +12,4 @@ cmds = ["npm install --include=dev --legacy-peer-deps --no-audit --no-fund"]
 cmds = ["npm run build"]
 
 [start]
-cmd = "NODE_ENV=production npx tsx server.ts"
+cmd = "NODE_ENV=production node server.ts"
