@@ -5,9 +5,9 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Install dependencies with clean lockfile/cache
-COPY package*.json ./
-RUN npm install --no-audit --no-fund
+# Copy package manifests and .npmrc first for layer caching
+COPY package*.json .npmrc ./
+RUN npm install --include=dev --legacy-peer-deps --no-audit --no-fund
 
 # Copy application source and build Vite frontend assets into /app/dist
 COPY . .
@@ -24,4 +24,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:${PORT:-3000}/api/health || exit 1
 
-CMD ["npm", "start"]
+CMD ["npx", "tsx", "server.ts"]
