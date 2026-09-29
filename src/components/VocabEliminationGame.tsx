@@ -7,9 +7,14 @@ import {
   ArrowLeft,
   Sparkles,
   BookOpen,
+  RefreshCw,
 } from "lucide-react";
 import { VocabularyEntry } from "../types/vocabulary";
 import { playKoreanAudio } from "../utils/audioPlayer";
+import {
+  CardDeepExplanation,
+  explainCardWithAI,
+} from "../services/geminiClient";
 
 interface VocabEliminationGameProps {
   selectedWords: VocabularyEntry[];
@@ -47,6 +52,35 @@ export const VocabEliminationGame: React.FC<VocabEliminationGameProps> = ({
   const [attemptsCount, setAttemptsCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
   const [clearedHistory, setClearedHistory] = useState<VocabularyEntry[]>([]);
+  const [aiExplanations, setAiExplanations] = useState<
+    Record<string, CardDeepExplanation>
+  >({});
+  const [isLoadingAiExplain, setIsLoadingAiExplain] = useState(false);
+  const [aiExplainError, setAiExplainError] = useState<string | null>(null);
+
+  const handleFetchAiDeepExplain = async (card: VocabularyEntry) => {
+    if (aiExplanations[card.koreanWord] || isLoadingAiExplain) return;
+    setIsLoadingAiExplain(true);
+    setAiExplainError(null);
+    try {
+      const result = await explainCardWithAI(
+        card.koreanWord,
+        card.vietnameseMeaning
+      );
+      setAiExplanations((prev) => ({
+        ...prev,
+        [card.koreanWord]: result,
+      }));
+    } catch (err) {
+      setAiExplainError(
+        err instanceof Error
+          ? err.message
+          : "Không thể gọi Gemini AI giải thích lúc này."
+      );
+    } finally {
+      setIsLoadingAiExplain(false);
+    }
+  };
 
   const startNewGame = (words: VocabularyEntry[]) => {
     const capped = words.slice(0, 10);
@@ -437,6 +471,76 @@ export const VocabEliminationGame: React.FC<VocabEliminationGameProps> = ({
                         </p>
                       </div>
                     )}
+
+                    {/* Live Gemini AI Deep Explanation & Memory Tip */}
+                    <div className="pt-3 border-t border-slate-200/80 space-y-2.5">
+                      {aiExplanations[inspectedCard.koreanWord] ? (
+                        <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-200/80 space-y-2 text-xs">
+                          <p className="font-semibold text-[#1D4ED8] flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>Gemini AI · Mẹo ghi nhớ &amp; Mở rộng:</span>
+                          </p>
+                          <p className="text-slate-700 leading-relaxed">
+                            <strong>Mẹo nhớ nhanh:</strong>{" "}
+                            {
+                              aiExplanations[inspectedCard.koreanWord]
+                                .memoryTipVietnamese
+                            }
+                          </p>
+                          <p className="text-slate-700 leading-relaxed">
+                            <strong>Phân biệt từ:</strong>{" "}
+                            {
+                              aiExplanations[inspectedCard.koreanWord]
+                                .usageComparisonVietnamese
+                            }
+                          </p>
+                          <div className="p-2 bg-white rounded border border-blue-100 space-y-1">
+                            <p className="font-korean font-medium text-slate-900">
+                              {
+                                aiExplanations[inspectedCard.koreanWord]
+                                  .miniDialogueKorean
+                              }
+                            </p>
+                            <p className="text-slate-500">
+                              {
+                                aiExplanations[inspectedCard.koreanWord]
+                                  .miniDialogueVietnamese
+                              }
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <button
+                            type="button"
+                            disabled={isLoadingAiExplain}
+                            onClick={() =>
+                              handleFetchAiDeepExplain(inspectedCard)
+                            }
+                            className="w-full py-2 px-3 bg-white hover:bg-blue-50 border border-blue-200 text-[#1D4ED8] text-xs font-semibold rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            {isLoadingAiExplain ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Đang kết nối Gemini AI...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>
+                                  Nhờ Gemini AI Tạo Mẹo Nhớ &amp; Hội Thoại Cho &ldquo;{inspectedCard.koreanWord}&rdquo;
+                                </span>
+                              </>
+                            )}
+                          </button>
+                          {aiExplainError && (
+                            <p className="text-[11px] text-red-600">
+                              {aiExplainError}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex justify-end">

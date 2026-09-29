@@ -7,9 +7,24 @@ import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function resolveGeminiApiKey(): string {
+  const rawKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.API_KEY ||
+    "";
+  return rawKey.replace(/^["']+|["']+$/g, "").trim();
+}
+
 function getAiClient() {
+  const apiKey = resolveGeminiApiKey();
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error(
+      "Chưa cấu hình GEMINI_API_KEY hợp lệ trên máy chủ. Hãy thêm biến môi trường GEMINI_API_KEY trong phần Environment Variables trên Coolify rồi Redeploy."
+    );
+  }
   return new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey,
     httpOptions: {
       headers: {
         "User-Agent": "aistudio-build",
@@ -424,6 +439,175 @@ Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ
       const message =
         error instanceof Error ? error.message : "Lỗi khi tạo giọng đọc tiếng Hàn.";
       return res.status(500).json({ error: message });
+    }
+  });
+
+  // 4. Endpoint: Deep AI explanation & memory tip for a selected card in the 10-word Elimination Game
+  app.post("/api/vocabulary/explain-card", async (req, res) => {
+    try {
+      const { koreanWord, vietnameseMeaning = "" } = req.body || {};
+      if (!koreanWord || typeof koreanWord !== "string" || !koreanWord.trim()) {
+        return res.status(400).json({ error: "Thiếu từ tiếng Hàn cần giải thích." });
+      }
+
+      const parsed = await generateStructuredJson({
+        contents: `Giải thích chuyên sâu và tạo mẹo ghi nhớ siêu tốc cho từ vựng tiếng Hàn "${koreanWord.trim()}" (nghĩa tiếng Việt: "${vietnameseMeaning}").
+Hãy cung cấp:
+1. memoryTipVietnamese: Mẹo ghi nhớ nhanh bằng âm Hán Việt hoặc liên tưởng âm thanh/hình ảnh thú vị cho người Việt.
+2. usageComparisonVietnamese: Phân biệt ngắn gọn từ này với 1 từ dễ nhầm lẫn trong tiếng Hàn.
+3. miniDialogueKorean: Hội thoại ngắn 2 câu (A và B) cực tự nhiên có dùng từ này.
+4. miniDialogueVietnamese: Dịch nghĩa tiếng Việt của đoạn hội thoại ngắn đó.`,
+        systemInstruction:
+          "Bạn là giảng viên tiếng Hàn truyền cảm hứng cho học viên người Việt. Hãy giải thích ngắn gọn, dễ nhớ, súc tích.",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            koreanWord: { type: Type.STRING },
+            memoryTipVietnamese: { type: Type.STRING },
+            usageComparisonVietnamese: { type: Type.STRING },
+            miniDialogueKorean: { type: Type.STRING },
+            miniDialogueVietnamese: { type: Type.STRING },
+          },
+          required: [
+            "koreanWord",
+            "memoryTipVietnamese",
+            "usageComparisonVietnamese",
+            "miniDialogueKorean",
+            "miniDialogueVietnamese",
+          ],
+        },
+      });
+
+      return res.json(parsed);
+    } catch (error) {
+      console.error("Error in /api/vocabulary/explain-card:", error);
+      const msg =
+        error instanceof Error ? error.message : "Không thể tải giải thích AI lúc này.";
+      return res.status(500).json({ error: msg });
+    }
+  });
+
+  // 5. Endpoint: Generate a thematic deck of Korean-Vietnamese vocabulary words (up to 5-10 words) via Gemini AI
+  app.post("/api/vocabulary/generate-deck", async (req, res) => {
+    try {
+      const { topic, count = 5 } = req.body || {};
+      if (!topic || typeof topic !== "string" || !topic.trim()) {
+        return res.status(400).json({ error: "Vui lòng nhập chủ đề từ vựng cần tạo." });
+      }
+
+      const safeCount = Math.min(Math.max(Number(count) || 5, 2), 8);
+
+      const parsed = await generateStructuredJson({
+        contents: `Hãy tạo danh sách gồm ĐÚNG ${safeCount} từ vựng tiếng Hàn thiết thực nhất thuộc chủ đề: "${topic.trim()}" dành cho người Việt học tiếng Hàn.
+Mỗi từ vựng phải có đầy đủ: koreanWord, romanization, vietnamesePronunciation, partOfSpeech, topikLevel, hanjaOrigin, vietnameseMeaning, koreanDefinition, vietnameseExplanation, synonyms, antonyms, collocations, và ĐÚNG 2 câu ví dụ (examples) có koreanSentence, highlightedForm, romanization, koreanMeaning, vietnameseMeaning, grammarAndNuanceNote, wordBreakdown.`,
+        systemInstruction:
+          "Bạn là chuyên gia biên soạn giáo trình từ vựng Hàn - Việt. Hãy trả về JSON đúng theo schema.",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            words: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  koreanWord: { type: Type.STRING },
+                  romanization: { type: Type.STRING },
+                  vietnamesePronunciation: { type: Type.STRING },
+                  partOfSpeech: { type: Type.STRING },
+                  topikLevel: { type: Type.STRING },
+                  hanjaOrigin: { type: Type.STRING },
+                  vietnameseMeaning: { type: Type.STRING },
+                  koreanDefinition: { type: Type.STRING },
+                  vietnameseExplanation: { type: Type.STRING },
+                  synonyms: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  antonyms: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  collocations: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        korean: { type: Type.STRING },
+                        vietnamese: { type: Type.STRING },
+                      },
+                      required: ["korean", "vietnamese"],
+                    },
+                  },
+                  examples: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: { type: Type.INTEGER },
+                        register: { type: Type.STRING },
+                        contextSituation: { type: Type.STRING },
+                        koreanSentence: { type: Type.STRING },
+                        highlightedForm: { type: Type.STRING },
+                        romanization: { type: Type.STRING },
+                        koreanMeaning: { type: Type.STRING },
+                        vietnameseMeaning: { type: Type.STRING },
+                        grammarAndNuanceNote: { type: Type.STRING },
+                        wordBreakdown: {
+                          type: Type.ARRAY,
+                          items: {
+                            type: Type.OBJECT,
+                            properties: {
+                              korean: { type: Type.STRING },
+                              vietnamese: { type: Type.STRING },
+                              role: { type: Type.STRING },
+                            },
+                            required: ["korean", "vietnamese", "role"],
+                          },
+                        },
+                      },
+                      required: [
+                        "id",
+                        "register",
+                        "contextSituation",
+                        "koreanSentence",
+                        "highlightedForm",
+                        "romanization",
+                        "koreanMeaning",
+                        "vietnameseMeaning",
+                        "grammarAndNuanceNote",
+                        "wordBreakdown",
+                      ],
+                    },
+                  },
+                },
+                required: [
+                  "koreanWord",
+                  "romanization",
+                  "vietnamesePronunciation",
+                  "partOfSpeech",
+                  "topikLevel",
+                  "hanjaOrigin",
+                  "vietnameseMeaning",
+                  "koreanDefinition",
+                  "vietnameseExplanation",
+                  "synonyms",
+                  "antonyms",
+                  "collocations",
+                  "examples",
+                ],
+              },
+            },
+          },
+          required: ["words"],
+        },
+      });
+
+      return res.json(parsed);
+    } catch (error) {
+      console.error("Error in /api/vocabulary/generate-deck:", error);
+      const msg =
+        error instanceof Error ? error.message : "Không thể tạo bộ từ vựng với Gemini AI.";
+      return res.status(500).json({ error: msg });
     }
   });
 

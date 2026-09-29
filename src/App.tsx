@@ -34,6 +34,11 @@ import { HangulKeyboard } from "./components/HangulKeyboard";
 import { UILayoutBlueprint } from "./components/UILayoutBlueprint";
 import { FlashcardTrainer } from "./components/FlashcardTrainer";
 import { VocabEliminationGame } from "./components/VocabEliminationGame";
+import {
+  analyzeVocabularyWithAI,
+  checkSentenceWithAI,
+  generateTopicDeckWithAI,
+} from "./services/geminiClient";
 
 const STORAGE_KEY = "hanviet_lexicon_saved_v1";
 
@@ -126,6 +131,70 @@ export default function App() {
   const [selectionLimitNotice, setSelectionLimitNotice] = useState<
     string | null
   >(null);
+  const [aiTopicInput, setAiTopicInput] = useState("");
+  const [isGeneratingDeck, setIsGeneratingDeck] = useState(false);
+
+  const handleGenerateTopicDeck = async (topicToGenerate: string) => {
+    const trimmedTopic = topicToGenerate.trim();
+    if (!trimmedTopic || isGeneratingDeck) return;
+    setIsGeneratingDeck(true);
+    setSelectionLimitNotice(null);
+
+    try {
+      const result = await generateTopicDeckWithAI(trimmedTopic, 5);
+      if (Array.isArray(result.words) && result.words.length > 0) {
+        const now = Date.now();
+        const generatedEntries: VocabularyEntry[] = result.words.map(
+          (w, index) => ({
+            id: `vocab-ai-${now}-${index}`,
+            koreanWord: w.koreanWord,
+            romanization: w.romanization || "",
+            vietnamesePronunciation: w.vietnamesePronunciation || "",
+            partOfSpeech: w.partOfSpeech || "어휘 · Từ vựng",
+            topikLevel: w.topikLevel || "TOPIK I–II",
+            hanjaOrigin: w.hanjaOrigin || "순우리말 · Từ thuần Hàn",
+            vietnameseMeaning: w.vietnameseMeaning || "",
+            koreanDefinition: w.koreanDefinition || "",
+            vietnameseExplanation: w.vietnameseExplanation || "",
+            synonyms: Array.isArray(w.synonyms) ? w.synonyms : [],
+            antonyms: Array.isArray(w.antonyms) ? w.antonyms : [],
+            collocations: Array.isArray(w.collocations) ? w.collocations : [],
+            examples: Array.isArray(w.examples) ? w.examples.slice(0, 2) : [],
+            createdAt: new Date().toISOString(),
+            masteryLevel: "learning",
+          })
+        );
+
+        setSavedEntries((prev) => {
+          const existingWords = new Set(
+            generatedEntries.map((item) => item.koreanWord)
+          );
+          const filteredPrev = prev.filter(
+            (item) => !existingWords.has(item.koreanWord)
+          );
+          return [...generatedEntries, ...filteredPrev];
+        });
+
+        // Auto-select the newly generated AI words (capped at 10)
+        setSelectedNotebookIds((prev) => {
+          const combined = [
+            ...generatedEntries.map((item) => item.id),
+            ...prev,
+          ];
+          return Array.from(new Set(combined)).slice(0, 10);
+        });
+        setAiTopicInput("");
+      }
+    } catch (err) {
+      setSelectionLimitNotice(
+        err instanceof Error
+          ? err.message
+          : "Không thể tạo bộ từ vựng bằng Gemini AI lúc này."
+      );
+    } finally {
+      setIsGeneratingDeck(false);
+    }
+  };
 
   const handleToggleSelectNotebookWord = (id: string) => {
     setSelectionLimitNotice(null);
@@ -210,21 +279,7 @@ export default function App() {
     setSentenceCheckError(null);
 
     try {
-      const response = await fetch("/api/vocabulary/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          word: trimmed,
-          contextStyle: style,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok || data.error) {
-        throw new Error(
-          data.error || "Không thể phân tích từ vựng lúc này. Vui lòng thử lại."
-        );
-      }
+      const data = await analyzeVocabularyWithAI(trimmed, style);
 
       const newEntry: VocabularyEntry = {
         id: `vocab-${Date.now()}`,
@@ -292,18 +347,10 @@ export default function App() {
     setSentenceCheckError(null);
 
     try {
-      const res = await fetch("/api/vocabulary/check-sentence", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          targetWord: currentEntry.koreanWord,
-          userSentence: practiceSentence.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Không thể kiểm tra câu lúc này.");
-      }
+      const data = await checkSentenceWithAI(
+        currentEntry.koreanWord,
+        practiceSentence.trim()
+      );
       setSentenceCheckResult(data);
     } catch (err) {
       setSentenceCheckError(
@@ -797,6 +844,61 @@ export default function App() {
                       {selectionLimitNotice}
                     </p>
                   )}
+
+                  {/* AI Topic Vocabulary Generator inside Notebook */}
+                  <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleGenerateTopicDeck(aiTopicInput);
+                      }}
+                      className="flex flex-1 items-center gap-2"
+                    >
+                      <input
+                        type="text"
+                        value={aiTopicInput}
+                        onChange={(e) => setAiTopicInput(e.target.value)}
+                        placeholder="Nhập chủ đề để Gemini AI tạo thêm 5 từ mới (VD: Du lịch Seoul, Phỏng vấn, Nhà hàng)..."
+                        className="flex-1 px-3 py-2 text-xs bg-slate-50 focus:bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#1D4ED8]"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isGeneratingDeck || !aiTopicInput.trim()}
+                        className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                      >
+                        {isGeneratingDeck ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Gemini đang tạo 5 từ...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>AI Tạo Từ Theo Chủ Đề</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
+
+                    <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                      <span className="text-slate-400">Chủ đề nhanh:</span>
+                      {[
+                        "Du lịch Hàn Quốc",
+                        "Phỏng vấn công sở",
+                        "Ẩm thực đường phố",
+                      ].map((topic) => (
+                        <button
+                          key={topic}
+                          type="button"
+                          disabled={isGeneratingDeck}
+                          onClick={() => handleGenerateTopicDeck(topic)}
+                          className="px-2.5 py-1 text-xs text-slate-600 hover:text-[#1D4ED8] bg-slate-50 hover:bg-blue-50 border border-slate-200 rounded-md transition-colors whitespace-nowrap"
+                        >
+                          + {topic}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </section>
 
                 {filteredNotebookEntries.length === 0 ? (
