@@ -75,18 +75,6 @@ const QUICK_SUGGESTIONS = [
   { korean: "인연", viet: "nhân duyên" },
   { korean: "해결하다", viet: "giải quyết" },
 ];
-// services/geminiClient.ts
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-const genAI = new GoogleGenerativeAI(apiKey);
-
-// Đảm bảo tên model chính xác (ví dụ: gemini-2.5-flash hoặc gemini-1.5-flash)
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-export async function analyzeVocabularyWithAI(word: string, style: string) { /* ... */ }
-export async function checkSentenceWithAI(word: string, sentence: string) { /* ... */ }
-export async function generateTopicDeckWithAI(topic: string, count: number) { /* ... */ }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveViewTab>("workspace");
