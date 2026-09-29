@@ -2,26 +2,114 @@ import "dotenv/config";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
+function getAiClient() {
+  return new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
     },
-  },
-});
+  });
+}
+
+// Track model cooldowns if a model temporarily returns 503 / 429 high demand
+const modelCooldownUntil = new Map<string, number>();
+
+const TEXT_MODELS_FALLBACK_ORDER = [
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-3.8-flash",
+];
+
+function cleanJsonString(raw: string): string {
+  let cleaned = String(raw || "").trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  }
+  return cleaned.trim();
+}
+
+async function generateStructuredJson(params: {
+  contents: string;
+  systemInstruction: string;
+  responseSchema: Record<string, unknown>;
+}) {
+  const ai = getAiClient();
+  const now = Date.now();
+
+  // Sort models so any model currently in 503 cooldown is tried last
+  const orderedModels = [...TEXT_MODELS_FALLBACK_ORDER].sort((a, b) => {
+    const aCooling = (modelCooldownUntil.get(a) || 0) > now ? 1 : 0;
+    const bCooling = (modelCooldownUntil.get(b) || 0) > now ? 1 : 0;
+    return aCooling - bCooling;
+  });
+
+  let lastError: unknown = null;
+
+  for (const modelName of orderedModels) {
+    try {
+      const config: Record<string, unknown> = {
+        systemInstruction: params.systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: params.responseSchema,
+        ...(modelName === "gemini-3.8-flash"
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : {}),
+      };
+
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: params.contents,
+        config,
+      });
+
+      const text = response.text;
+      if (!text) {
+        throw new Error(`Empty response from ${modelName}`);
+      }
+
+      const parsed = JSON.parse(cleanJsonString(text));
+      // Clear cooldown on success
+      modelCooldownUntil.delete(modelName);
+      return parsed;
+    } catch (err) {
+      lastError = err;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[Gemini Fallback] Model ${modelName} failed (${errMsg}). Trying next fallback model...`
+      );
+      // Put this model on a 90-second cooldown if overloaded / unavailable
+      modelCooldownUntil.set(modelName, Date.now() + 90_000);
+    }
+  }
+
+  throw lastError || new Error("Tất cả các mô hình Gemini hiện đang bận.");
+}
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const HOST = process.env.HOST || "0.0.0.0";
 
+  app.disable("x-powered-by");
   app.use(express.json({ limit: "2mb" }));
+
+  // Coolify & Container Healthcheck Endpoints
+  app.get(["/api/health", "/health"], (_req, res) => {
+    res.status(200).json({
+      status: "ok",
+      service: "hanviet-lexicon",
+      uptime: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+      geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    });
+  });
 
   // 1. Endpoint: Analyze Korean vocabulary & generate 2 bilingual Korean-Vietnamese example sentences
   app.post("/api/vocabulary/analyze", async (req, res) => {
@@ -55,8 +143,7 @@ async function startServer() {
               ? stylePrompts.culture
               : stylePrompts.daily;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
+      const parsed = await generateStructuredJson({
         contents: `Phân tích chuyên sâu từ vựng tiếng Hàn cho người Việt học tiếng Hàn.
 Từ đầu vào của người dùng: "${trimmedWord}" (Nếu người dùng nhập tiếng Việt, hãy dịch sang từ vựng tiếng Hàn chuẩn xác và phổ biến nhất tương ứng rồi phân tích từ tiếng Hàn đó; nếu người dùng nhập từ tiếng Hàn đã chia đuôi, hãy đưa về dạng nguyên mẫu từ điển ở trường koreanWord).
 
@@ -71,171 +158,161 @@ Yêu cầu BẮT BUỘC:
    - vietnameseMeaning: Dịch nghĩa tiếng Việt tự nhiên, chuẩn xác của cả câu ví dụ (Nghĩa tiếng Việt).
    - grammarAndNuanceNote: Giải thích ngắn gọn ngữ pháp và sắc thái dùng từ trong câu bằng tiếng Việt.
    - wordBreakdown: Phân tách từng cụm từ/thành phần trong câu (korean, vietnamese, role).`,
-        config: {
-          systemInstruction:
-            "Bạn là chuyên gia ngôn ngữ học Hàn - Việt (Korean-Vietnamese Lexicographer & TOPIK Instructor). Hãy trả về JSON chính xác theo schema, ngôn từ sư phạm, rõ ràng, chuẩn xác cho người Việt học tiếng Hàn.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              koreanWord: {
-                type: Type.STRING,
-                description: "Từ vựng tiếng Hàn ở dạng nguyên mẫu chuẩn (Hangul).",
-              },
-              romanization: {
-                type: Type.STRING,
-                description: "Phiên âm Revised Romanization của từ.",
-              },
-              vietnamesePronunciation: {
-                type: Type.STRING,
-                description: "Gợi ý cách đọc gần đúng bằng tiếng Việt (ví dụ: xol-lê-đa).",
-              },
-              partOfSpeech: {
-                type: Type.STRING,
-                description: "Từ loại song ngữ Hàn - Việt (ví dụ: 동사 · Động từ).",
-              },
-              topikLevel: {
-                type: Type.STRING,
-                description: "Cấp độ TOPIK ước lượng (ví dụ: TOPIK I · Sơ cấp 2 hoặc TOPIK II · Trung cấp 3).",
-              },
-              hanjaOrigin: {
-                type: Type.STRING,
-                description: "Chữ Hán và Âm Hán Việt nếu là từ Hán Hàn, hoặc ghi '순우리말 · Từ thuần Hàn' nếu là từ thuần Hàn.",
-              },
-              vietnameseMeaning: {
-                type: Type.STRING,
-                description: "Nghĩa tiếng Việt chính xác, cô đọng.",
-              },
-              koreanDefinition: {
-                type: Type.STRING,
-                description: "Định nghĩa giải thích nghĩa của từ bằng tiếng Hàn chuẩn (한국어 사전적 의미).",
-              },
-              vietnameseExplanation: {
-                type: Type.STRING,
-                description: "Giải thích chi tiết bằng tiếng Việt về sắc thái ngữ cảnh, cách dùng trong đời sống Hàn Quốc và lưu ý khi sử dụng.",
-              },
-              synonyms: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "2-3 từ đồng nghĩa hoặc gần nghĩa trong tiếng Hàn kèm nghĩa Việt ngắn gọn.",
-              },
-              antonyms: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: "1-2 từ trái nghĩa trong tiếng Hàn kèm nghĩa Việt ngắn gọn.",
-              },
-              collocations: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    korean: { type: Type.STRING },
-                    vietnamese: { type: Type.STRING },
-                  },
-                  required: ["korean", "vietnamese"],
+        systemInstruction:
+          "Bạn là chuyên gia ngôn ngữ học Hàn - Việt (Korean-Vietnamese Lexicographer & TOPIK Instructor). Hãy trả về JSON chính xác theo schema, ngôn từ sư phạm, rõ ràng, chuẩn xác cho người Việt học tiếng Hàn.",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            koreanWord: {
+              type: Type.STRING,
+              description: "Từ vựng tiếng Hàn ở dạng nguyên mẫu chuẩn (Hangul).",
+            },
+            romanization: {
+              type: Type.STRING,
+              description: "Phiên âm Revised Romanization của từ.",
+            },
+            vietnamesePronunciation: {
+              type: Type.STRING,
+              description: "Gợi ý cách đọc gần đúng bằng tiếng Việt (ví dụ: xol-lê-đa).",
+            },
+            partOfSpeech: {
+              type: Type.STRING,
+              description: "Từ loại song ngữ Hàn - Việt (ví dụ: 동사 · Động từ).",
+            },
+            topikLevel: {
+              type: Type.STRING,
+              description: "Cấp độ TOPIK ước lượng (ví dụ: TOPIK I · Sơ cấp 2 hoặc TOPIK II · Trung cấp 3).",
+            },
+            hanjaOrigin: {
+              type: Type.STRING,
+              description: "Chữ Hán và Âm Hán Việt nếu là từ Hán Hàn, hoặc ghi '순우리말 · Từ thuần Hàn' nếu là từ thuần Hàn.",
+            },
+            vietnameseMeaning: {
+              type: Type.STRING,
+              description: "Nghĩa tiếng Việt chính xác, cô đọng.",
+            },
+            koreanDefinition: {
+              type: Type.STRING,
+              description: "Định nghĩa giải thích nghĩa của từ bằng tiếng Hàn chuẩn (한국어 사전적 의미).",
+            },
+            vietnameseExplanation: {
+              type: Type.STRING,
+              description: "Giải thích chi tiết bằng tiếng Việt về sắc thái ngữ cảnh, cách dùng trong đời sống Hàn Quốc và lưu ý khi sử dụng.",
+            },
+            synonyms: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "2-3 từ đồng nghĩa hoặc gần nghĩa trong tiếng Hàn kèm nghĩa Việt ngắn gọn.",
+            },
+            antonyms: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "1-2 từ trái nghĩa trong tiếng Hàn kèm nghĩa Việt ngắn gọn.",
+            },
+            collocations: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  korean: { type: Type.STRING },
+                  vietnamese: { type: Type.STRING },
                 },
-                description: "3 cụm từ kết hợp phổ biến (Collocations) với từ này.",
+                required: ["korean", "vietnamese"],
               },
-              examples: {
-                type: Type.ARRAY,
-                description: "Chính xác 2 câu ví dụ song ngữ kèm giải nghĩa tiếng Hàn và tiếng Việt.",
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.INTEGER },
-                    register: {
-                      type: Type.STRING,
-                      description: "Cấp độ kính ngữ / văn phong (ví dụ: 해요체 · Giao tiếp lịch sự).",
-                    },
-                    contextSituation: {
-                      type: Type.STRING,
-                      description: "Bối cảnh sử dụng câu ví dụ (song ngữ Hàn · Việt).",
-                    },
-                    koreanSentence: {
-                      type: Type.STRING,
-                      description: "Câu ví dụ tiếng Hàn hoàn chỉnh, tự nhiên.",
-                    },
-                    highlightedForm: {
-                      type: Type.STRING,
-                      description: "Từ hoặc cụm từ mục tiêu đúng như dạng đã chia trong koreanSentence.",
-                    },
-                    romanization: {
-                      type: Type.STRING,
-                      description: "Phiên âm Latinh của câu ví dụ.",
-                    },
-                    koreanMeaning: {
-                      type: Type.STRING,
-                      description: "Giải nghĩa câu ví dụ bằng tiếng Hàn dễ hiểu (한국어 의미 풀이).",
-                    },
-                    vietnameseMeaning: {
-                      type: Type.STRING,
-                      description: "Nghĩa dịch sang tiếng Việt tự nhiên, sát nghĩa.",
-                    },
-                    grammarAndNuanceNote: {
-                      type: Type.STRING,
-                      description: "Điểm ngữ pháp và sắc thái từ vựng đáng chú ý trong câu.",
-                    },
-                    wordBreakdown: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          korean: { type: Type.STRING },
-                          vietnamese: { type: Type.STRING },
-                          role: { type: Type.STRING },
-                        },
-                        required: ["korean", "vietnamese", "role"],
+              description: "3 cụm từ kết hợp phổ biến (Collocations) với từ này.",
+            },
+            examples: {
+              type: Type.ARRAY,
+              description: "Chính xác 2 câu ví dụ song ngữ kèm giải nghĩa tiếng Hàn và tiếng Việt.",
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.INTEGER },
+                  register: {
+                    type: Type.STRING,
+                    description: "Cấp độ kính ngữ / văn phong (ví dụ: 해요체 · Giao tiếp lịch sự).",
+                  },
+                  contextSituation: {
+                    type: Type.STRING,
+                    description: "Bối cảnh sử dụng câu ví dụ (song ngữ Hàn · Việt).",
+                  },
+                  koreanSentence: {
+                    type: Type.STRING,
+                    description: "Câu ví dụ tiếng Hàn hoàn chỉnh, tự nhiên.",
+                  },
+                  highlightedForm: {
+                    type: Type.STRING,
+                    description: "Từ hoặc cụm từ mục tiêu đúng như dạng đã chia trong koreanSentence.",
+                  },
+                  romanization: {
+                    type: Type.STRING,
+                    description: "Phiên âm Latinh của câu ví dụ.",
+                  },
+                  koreanMeaning: {
+                    type: Type.STRING,
+                    description: "Giải nghĩa câu ví dụ bằng tiếng Hàn dễ hiểu (한국어 의미 풀이).",
+                  },
+                  vietnameseMeaning: {
+                    type: Type.STRING,
+                    description: "Nghĩa dịch sang tiếng Việt tự nhiên, sát nghĩa.",
+                  },
+                  grammarAndNuanceNote: {
+                    type: Type.STRING,
+                    description: "Điểm ngữ pháp và sắc thái từ vựng đáng chú ý trong câu.",
+                  },
+                  wordBreakdown: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        korean: { type: Type.STRING },
+                        vietnamese: { type: Type.STRING },
+                        role: { type: Type.STRING },
                       },
+                      required: ["korean", "vietnamese", "role"],
                     },
                   },
-                  required: [
-                    "id",
-                    "register",
-                    "contextSituation",
-                    "koreanSentence",
-                    "highlightedForm",
-                    "romanization",
-                    "koreanMeaning",
-                    "vietnameseMeaning",
-                    "grammarAndNuanceNote",
-                    "wordBreakdown",
-                  ],
                 },
+                required: [
+                  "id",
+                  "register",
+                  "contextSituation",
+                  "koreanSentence",
+                  "highlightedForm",
+                  "romanization",
+                  "koreanMeaning",
+                  "vietnameseMeaning",
+                  "grammarAndNuanceNote",
+                  "wordBreakdown",
+                ],
               },
             },
-            required: [
-              "koreanWord",
-              "romanization",
-              "vietnamesePronunciation",
-              "partOfSpeech",
-              "topikLevel",
-              "hanjaOrigin",
-              "vietnameseMeaning",
-              "koreanDefinition",
-              "vietnameseExplanation",
-              "synonyms",
-              "antonyms",
-              "collocations",
-              "examples",
-            ],
           },
+          required: [
+            "koreanWord",
+            "romanization",
+            "vietnamesePronunciation",
+            "partOfSpeech",
+            "topikLevel",
+            "hanjaOrigin",
+            "vietnameseMeaning",
+            "koreanDefinition",
+            "vietnameseExplanation",
+            "synonyms",
+            "antonyms",
+            "collocations",
+            "examples",
+          ],
         },
       });
 
-      const text = response.text;
-      if (!text) {
-        return res.status(502).json({
-          error: "Không nhận được phản hồi từ Gemini AI. Vui lòng thử lại.",
-        });
-      }
-
-      const parsed = JSON.parse(text.trim());
       return res.json(parsed);
     } catch (error) {
       console.error("Error in /api/vocabulary/analyze:", error);
-      const message =
-        error instanceof Error ? error.message : "Lỗi máy chủ khi gọi Gemini AI.";
-      return res.status(500).json({ error: message });
+      return res.status(500).json({
+        error:
+          "Máy chủ Gemini AI hiện đang quá tải tạm thời. Hệ thống đã thử chuyển đổi mô hình dự phòng nhưng chưa phản hồi kịp, vui lòng bấm 'Thử lại' sau vài giây.",
+      });
     }
   });
 
@@ -249,61 +326,53 @@ Yêu cầu BẮT BUỘC:
         });
       }
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
+      const parsed = await generateStructuredJson({
         contents: `Người học đang luyện đặt câu với từ vựng tiếng Hàn "${targetWord}".
 Câu của người học: "${userSentence.trim()}"
 
 Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ và độ tự nhiên, sau đó trả về kết quả JSON theo schema.`,
-        config: {
-          systemInstruction:
-            "Bạn là giáo viên bản ngữ tiếng Hàn tận tâm hướng dẫn học viên người Việt. Hãy nhận xét chi tiết, khích lệ và đưa ra câu sửa tự nhiên nhất.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              isNatural: {
-                type: Type.BOOLEAN,
-                description: "True nếu câu đúng ngữ pháp và tự nhiên.",
-              },
-              correctedKorean: {
-                type: Type.STRING,
-                description: "Câu tiếng Hàn đã được chỉnh sửa hoàn chỉnh, tự nhiên nhất.",
-              },
-              koreanExplanation: {
-                type: Type.STRING,
-                description: "Giải thích ý nghĩa câu đã sửa bằng tiếng Hàn.",
-              },
-              vietnameseTranslation: {
-                type: Type.STRING,
-                description: "Nghĩa tiếng Việt của câu đã chỉnh sửa.",
-              },
-              feedbackVietnamese: {
-                type: Type.STRING,
-                description: "Nhận xét chi tiết bằng tiếng Việt về tiểu từ, cách chia động/tính từ và độ tự nhiên.",
-              },
+        systemInstruction:
+          "Bạn là giáo viên bản ngữ tiếng Hàn tận tâm hướng dẫn học viên người Việt. Hãy nhận xét chi tiết, khích lệ và đưa ra câu sửa tự nhiên nhất.",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isNatural: {
+              type: Type.BOOLEAN,
+              description: "True nếu câu đúng ngữ pháp và tự nhiên.",
             },
-            required: [
-              "isNatural",
-              "correctedKorean",
-              "koreanExplanation",
-              "vietnameseTranslation",
-              "feedbackVietnamese",
-            ],
+            correctedKorean: {
+              type: Type.STRING,
+              description: "Câu tiếng Hàn đã được chỉnh sửa hoàn chỉnh, tự nhiên nhất.",
+            },
+            koreanExplanation: {
+              type: Type.STRING,
+              description: "Giải thích ý nghĩa câu đã sửa bằng tiếng Hàn.",
+            },
+            vietnameseTranslation: {
+              type: Type.STRING,
+              description: "Nghĩa tiếng Việt của câu đã chỉnh sửa.",
+            },
+            feedbackVietnamese: {
+              type: Type.STRING,
+              description: "Nhận xét chi tiết bằng tiếng Việt về tiểu từ, cách chia động/tính từ và độ tự nhiên.",
+            },
           },
+          required: [
+            "isNatural",
+            "correctedKorean",
+            "koreanExplanation",
+            "vietnameseTranslation",
+            "feedbackVietnamese",
+          ],
         },
       });
 
-      const text = response.text;
-      if (!text) {
-        return res.status(502).json({ error: "Không nhận được phản hồi từ Gemini AI." });
-      }
-      return res.json(JSON.parse(text.trim()));
+      return res.json(parsed);
     } catch (error) {
       console.error("Error in /api/vocabulary/check-sentence:", error);
-      const message =
-        error instanceof Error ? error.message : "Lỗi khi kiểm tra câu với Gemini AI.";
-      return res.status(500).json({ error: message });
+      return res.status(500).json({
+        error: "Không thể kiểm tra câu lúc này do máy chủ AI đang bận. Vui lòng thử lại.",
+      });
     }
   });
 
@@ -315,6 +384,7 @@ Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ
         return res.status(400).json({ error: "Thiếu văn bản cần đọc." });
       }
 
+      const ai = getAiClient();
       const response = await ai.models.generateContent({
         model: "gemini-3.8-flash-lite-tts",
         contents: [
@@ -358,6 +428,7 @@ Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ
   });
 
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -365,15 +436,32 @@ Hãy đánh giá câu này về ngữ pháp, cách chia đuôi từ, tiểu từ
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, "dist");
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        maxAge: "1d",
+        index: false,
+      })
+    );
     app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`HanViet Lexicon Server running on http://localhost:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`HanViet Lexicon Server running on http://${HOST}:${PORT}`);
   });
+
+  // Graceful shutdown for Coolify / Docker rolling deployments
+  const shutdown = (signal: string) => {
+    console.log(`Received ${signal}. Shutting down gracefully...`);
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 startServer();
