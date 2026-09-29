@@ -10,10 +10,28 @@ const __dirname = path.dirname(__filename);
 function resolveGeminiApiKey(): string {
   const rawKey =
     process.env.GEMINI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
     process.env.GOOGLE_API_KEY ||
     process.env.API_KEY ||
+    process.env.GEMINI_KEY ||
+    process.env.GOOGLE_GEMINI_API_KEY ||
     "";
-  return rawKey.replace(/^["']+|["']+$/g, "").trim();
+  const cleaned = rawKey.replace(/^["']+|["']+$/g, "").trim();
+  if (cleaned && cleaned !== "MY_GEMINI_API_KEY") {
+    return cleaned;
+  }
+
+  // Fallback: scan process.env for any Google Gemini key (starts with AIza)
+  for (const val of Object.values(process.env)) {
+    if (typeof val === "string") {
+      const candidate = val.replace(/^["']+|["']+$/g, "").trim();
+      if (/^AIza[A-Za-z0-9_-]{25,}$/.test(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return "";
 }
 
 function getAiClient() {
@@ -650,6 +668,26 @@ Mỗi từ vựng phải có đầy đủ: koreanWord, romanization, vietnameseP
   const server = app.listen(PORT, HOST, () => {
     console.log(`HanViet Lexicon Server running on http://${HOST}:${PORT}`);
   });
+
+  // In production container environments (Coolify / Nixpacks), also listen on
+  // fallback port 80 or 3000 if PORT was set differently by a Caddy/Static preset.
+  if (process.env.NODE_ENV === "production") {
+    const extraPorts = [3000, 80].filter((p) => p !== PORT);
+    for (const extraPort of extraPorts) {
+      try {
+        const extraServer = app.listen(extraPort, HOST, () => {
+          console.log(
+            `HanViet Lexicon Server also listening on fallback http://${HOST}:${extraPort}`
+          );
+        });
+        extraServer.on("error", () => {
+          // Ignore if port is privileged or already bound
+        });
+      } catch {
+        // Ignore fallback port binding errors
+      }
+    }
+  }
 
   // Graceful shutdown for Coolify / Docker rolling deployments
   const shutdown = (signal: string) => {

@@ -2,12 +2,47 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 
+function findGeminiKeyInEnv() {
+  const explicit =
+    process.env.GEMINI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.API_KEY ||
+    process.env.GEMINI_KEY ||
+    process.env.GOOGLE_GEMINI_API_KEY ||
+    "";
+
+  const cleanedExplicit = explicit.replace(/^["']+|["']+$/g, "").trim();
+  if (cleanedExplicit && cleanedExplicit !== "MY_GEMINI_API_KEY") {
+    return cleanedExplicit;
+  }
+
+  for (const val of Object.values(process.env)) {
+    if (typeof val === "string") {
+      const trimmed = val.replace(/^["']+|["']+$/g, "").trim();
+      if (/^AIza[A-Za-z0-9_-]{25,}$/.test(trimmed)) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "";
+}
+
 /**
  * Post-build helper for Coolify / Nixpacks deployments.
- * 1. Writes dist/env-config.json if build-time GEMINI_API_KEY is available.
- * 2. If Coolify/Nixpacks generated /assets/Caddyfile (Static Site mode),
- *    injects a `/api/runtime-env` handler into /assets/Caddyfile so Caddy
- *    exposes the container's runtime GEMINI_API_KEY even when server.ts is not started.
+ *
+ * Why this is needed:
+ * Nixpacks's Node SPA provider detects Vite and configures the container to start
+ * `caddy run --config /assets/Caddyfile` instead of `node server.ts`, which causes
+ * `/api/vocabulary/*` POST requests to return HTTP 404.
+ *
+ * This script:
+ * 1. Intercepts the `caddy` binary inside the Nixpacks container so that when the
+ *    container runs `caddy run ...` at startup, it launches `node /app/server.ts`
+ *    (Full-Stack Express + Gemini AI server) instead of static-only Caddy!
+ * 2. Also creates `/app/dist/api/runtime-env` and `/app/dist/env-config.json` as
+ *    fallbacks if served statically.
  */
 function runPostBuild() {
   const distDir = path.resolve(process.cwd(), "dist");
@@ -15,71 +50,53 @@ function runPostBuild() {
     return;
   }
 
-  const buildTimeKey = (
-    process.env.GEMINI_API_KEY ||
-    process.env.VITE_GEMINI_API_KEY ||
-    process.env.GOOGLE_API_KEY ||
-    process.env.API_KEY ||
-    ""
-  )
-    .replace(/^["']+|["']+$/g, "")
-    .trim();
+  const buildTimeKey = findGeminiKeyInEnv();
 
-  // Create fallback static JSON file in dist/
-  const envConfigPath = path.join(distDir, "env-config.json");
-  fs.writeFileSync(
-    envConfigPath,
-    JSON.stringify({
-      geminiApiKey:
-        buildTimeKey && buildTimeKey !== "MY_GEMINI_API_KEY"
-          ? buildTimeKey
-          : "",
-    }),
-    "utf8"
-  );
+  // 1. Write static fallback config files into dist/ and dist/api/
+  const payload = JSON.stringify({
+    geminiApiKey: buildTimeKey,
+  });
 
-  // Check if running inside a Coolify / Nixpacks Caddy container build
-  const caddyfilePath = "/assets/Caddyfile";
-  if (fs.existsSync(caddyfilePath)) {
-    try {
-      const original = fs.readFileSync(caddyfilePath, "utf8");
-      if (!original.includes("/api/runtime-env")) {
-        const runtimeHandler = `
-\thandle /api/runtime-env {
-\t\theader Content-Type "application/json"
-\t\trespond \`{"geminiApiKey":"{env.GEMINI_API_KEY}","viteGeminiApiKey":"{env.VITE_GEMINI_API_KEY}","googleApiKey":"{env.GOOGLE_API_KEY}","apiKey":"{env.API_KEY}"}\` 200
-\t}
-`;
-        let patched = original;
-        if (original.includes("root *")) {
-          patched = original.replace("root *", `${runtimeHandler}\n\troot *`);
-        } else if (original.includes("file_server")) {
-          patched = original.replace(
-            "file_server",
-            `${runtimeHandler}\n\tfile_server`
-          );
-        }
+  fs.writeFileSync(path.join(distDir, "env-config.json"), payload, "utf8");
 
-        if (patched !== original) {
-          fs.writeFileSync(caddyfilePath, patched, "utf8");
-          try {
-            execSync("caddy fmt --overwrite /assets/Caddyfile", {
-              stdio: "ignore",
-            });
-          } catch {
-            // Ignore if caddy binary is not in PATH
-          }
-          console.log(
-            "[postbuild-coolify] Injected /api/runtime-env into /assets/Caddyfile"
-          );
-        }
+  const distApiDir = path.join(distDir, "api");
+  fs.mkdirSync(distApiDir, { recursive: true });
+  fs.writeFileSync(path.join(distApiDir, "runtime-env"), payload, "utf8");
+
+  // 2. If running inside a Nixpacks/Coolify build that installed Caddy,
+  //    replace `caddy run` with `node /app/server.ts` so the Express backend runs at runtime!
+  try {
+    const caddyBin = execSync("which caddy", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+
+    if (caddyBin && fs.existsSync(caddyBin)) {
+      const realCaddyBin = `${caddyBin}.real`;
+      if (!fs.existsSync(realCaddyBin)) {
+        fs.copyFileSync(caddyBin, realCaddyBin);
+        fs.chmodSync(realCaddyBin, 0o755);
       }
-    } catch (err) {
-      console.warn(
-        "[postbuild-coolify] Skipping /assets/Caddyfile patch:",
-        err
+
+      const appDir = process.cwd();
+      const wrapperScript = `#!/bin/sh
+if [ "$1" = "run" ]; then
+  echo "[HanViet Lexicon] Intercepted 'caddy run' -> Launching Full-Stack Express Server (node ${appDir}/server.ts)..."
+  export NODE_ENV=production
+  cd "${appDir}"
+  exec node "${appDir}/server.ts"
+else
+  exec "${realCaddyBin}" "$@"
+fi
+`;
+      fs.writeFileSync(caddyBin, wrapperScript, { mode: 0o755 });
+      fs.chmodSync(caddyBin, 0o755);
+      console.log(
+        `[postbuild-coolify] Installed Full-Stack Node Express bridge at ${caddyBin}`
       );
     }
+  } catch {
+    // caddy is not installed in this environment; nothing to wrap
   }
 }
 

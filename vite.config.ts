@@ -5,19 +5,38 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
-  const geminiApiKey = (
+  let geminiApiKey = (
     process.env.GEMINI_API_KEY ||
     process.env.VITE_GEMINI_API_KEY ||
     process.env.GOOGLE_API_KEY ||
     process.env.API_KEY ||
+    process.env.GEMINI_KEY ||
+    process.env.GOOGLE_GEMINI_API_KEY ||
     env.GEMINI_API_KEY ||
     env.VITE_GEMINI_API_KEY ||
     env.GOOGLE_API_KEY ||
     env.API_KEY ||
+    env.GEMINI_KEY ||
+    env.GOOGLE_GEMINI_API_KEY ||
     ''
   )
     .replace(/^["']+|["']+$/g, '')
     .trim();
+
+  if (!geminiApiKey || geminiApiKey === 'MY_GEMINI_API_KEY') {
+    for (const val of [
+      ...Object.values(process.env),
+      ...Object.values(env),
+    ]) {
+      if (typeof val === 'string') {
+        const candidate = val.replace(/^["']+|["']+$/g, '').trim();
+        if (/^AIza[A-Za-z0-9_-]{25,}$/.test(candidate)) {
+          geminiApiKey = candidate;
+          break;
+        }
+      }
+    }
+  }
 
   return {
     plugins: [react(), tailwindcss()],
