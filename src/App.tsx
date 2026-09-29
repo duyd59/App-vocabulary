@@ -15,6 +15,9 @@ import {
   EyeOff,
   Trash2,
   ArrowUpRight,
+  Play,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import {
   VocabularyEntry,
@@ -30,6 +33,7 @@ import { playKoreanAudio } from "./utils/audioPlayer";
 import { HangulKeyboard } from "./components/HangulKeyboard";
 import { UILayoutBlueprint } from "./components/UILayoutBlueprint";
 import { FlashcardTrainer } from "./components/FlashcardTrainer";
+import { VocabEliminationGame } from "./components/VocabEliminationGame";
 
 const STORAGE_KEY = "hanviet_lexicon_saved_v1";
 
@@ -75,7 +79,13 @@ export default function App() {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          const existingWords = new Set(
+            parsed.map((item: VocabularyEntry) => item.koreanWord)
+          );
+          const missingDefaults = INITIAL_CURATED_VOCABULARY.filter(
+            (item) => !existingWords.has(item.koreanWord)
+          );
+          return [...parsed, ...missingDefaults];
         }
       }
     } catch {
@@ -104,11 +114,34 @@ export default function App() {
     null
   );
 
-  // Notebook filter state
+  // Notebook filter & 10-word selection game state
   const [notebookQuery, setNotebookQuery] = useState("");
   const [masteryFilter, setMasteryFilter] = useState<
     "all" | "learning" | "reviewing" | "mastered"
   >("all");
+  const [selectedNotebookIds, setSelectedNotebookIds] = useState<string[]>(() =>
+    INITIAL_CURATED_VOCABULARY.slice(0, 6).map((item) => item.id)
+  );
+  const [isPlayingNotebookGame, setIsPlayingNotebookGame] = useState(false);
+  const [selectionLimitNotice, setSelectionLimitNotice] = useState<
+    string | null
+  >(null);
+
+  const handleToggleSelectNotebookWord = (id: string) => {
+    setSelectionLimitNotice(null);
+    setSelectedNotebookIds((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((item) => item !== id);
+      }
+      if (prev.length >= 10) {
+        setSelectionLimitNotice(
+          "Bạn đã chọn tối đa 10 từ vựng. Hãy bỏ chọn bớt nếu muốn đổi từ khác."
+        );
+        return prev;
+      }
+      return [...prev, id];
+    });
+  };
 
   useEffect(() => {
     try {
@@ -575,156 +608,346 @@ export default function App() {
 
         {activeTab === "notebook" && (
           <div className="space-y-6 pb-12">
-            <div className="border-b border-slate-200 pb-5 flex flex-col md:flex-row md:items-end justify-between gap-4">
-              <div>
-                <p className="text-xs text-slate-500 mb-1">
-                  Lưu trữ cá nhân · Personal Bilingual Lexicon
-                </p>
-                <h1 className="text-2xl font-semibold text-slate-900 font-display">
-                  Sổ Từ Vựng Hàn - Việt Đã Lưu ({savedEntries.length})
-                </h1>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Interactive Segmented Filter Control */}
-                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-                  {(
-                    [
-                      { id: "all", label: "Tất cả" },
-                      { id: "learning", label: "Đang học" },
-                      { id: "reviewing", label: "Cần ôn" },
-                      { id: "mastered", label: "Đã thuộc" },
-                    ] as const
-                  ).map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setMasteryFilter(tab.id)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                        masteryFilter === tab.id
-                          ? "bg-white text-slate-900 shadow-xs"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={notebookQuery}
-                    onChange={(e) => setNotebookQuery(e.target.value)}
-                    placeholder="Lọc từ Hàn hoặc nghĩa Việt..."
-                    className="pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#1D4ED8] w-52"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {filteredNotebookEntries.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-xl p-12 text-center space-y-3">
-                <p className="text-base font-semibold text-slate-900">
-                  Không tìm thấy từ vựng phù hợp
-                </p>
-                <p className="text-xs text-slate-500">
-                  Hãy thử thay đổi bộ lọc hoặc tra cứu thêm từ mới với Gemini AI.
-                </p>
-              </div>
+            {isPlayingNotebookGame ? (
+              <VocabEliminationGame
+                selectedWords={savedEntries
+                  .filter((entry) => selectedNotebookIds.includes(entry.id))
+                  .slice(0, 10)}
+                onExitToNotebook={() => setIsPlayingNotebookGame(false)}
+                onInspectInWorkspace={(entry) => {
+                  setCurrentEntry(entry);
+                  setSearchInput(entry.koreanWord);
+                  setIsPlayingNotebookGame(false);
+                  setActiveTab("workspace");
+                }}
+              />
             ) : (
-              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-600">
-                        <th className="py-3.5 px-5">Từ vựng (Hangul)</th>
-                        <th className="py-3.5 px-4">Nghĩa tiếng Việt &amp; Định nghĩa Hàn</th>
-                        <th className="py-3.5 px-4">Hán-Hàn · TOPIK</th>
-                        <th className="py-3.5 px-4">2 Câu Ví Dụ Song Ngữ</th>
-                        <th className="py-3.5 px-4 text-right">Thao tác</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 text-sm">
-                      {filteredNotebookEntries.map((entry) => (
-                        <tr
-                          key={entry.id}
-                          className="hover:bg-slate-50/80 transition-colors"
+              <>
+                <div className="border-b border-slate-200 pb-5 flex flex-col md:flex-row md:items-end justify-between gap-4">
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1">
+                      Lưu trữ cá nhân · Personal Bilingual Lexicon
+                    </p>
+                    <h1 className="text-2xl font-semibold text-slate-900 font-display">
+                      Sổ Từ Vựng Hàn - Việt Đã Lưu ({savedEntries.length})
+                    </h1>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Interactive Segmented Filter Control */}
+                    <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                      {(
+                        [
+                          { id: "all", label: "Tất cả" },
+                          { id: "learning", label: "Đang học" },
+                          { id: "reviewing", label: "Cần ôn" },
+                          { id: "mastered", label: "Đã thuộc" },
+                        ] as const
+                      ).map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setMasteryFilter(tab.id)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                            masteryFilter === tab.id
+                              ? "bg-white text-slate-900 shadow-xs"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
                         >
-                          <td className="py-4 px-5 align-top whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCurrentEntry(entry);
-                                setSearchInput(entry.koreanWord);
-                                setActiveTab("workspace");
-                              }}
-                              className="text-left group"
-                            >
-                              <span className="text-lg font-korean-serif font-semibold text-slate-900 group-hover:text-[#1D4ED8] block">
-                                {entry.koreanWord}
-                              </span>
-                              <span className="text-xs font-mono text-slate-400">
-                                [{entry.romanization}]
-                              </span>
-                            </button>
-                          </td>
-                          <td className="py-4 px-4 align-top max-w-xs">
-                            <p className="font-semibold text-slate-900 text-xs">
-                              {entry.vietnameseMeaning}
-                            </p>
-                            <p className="text-xs font-korean text-slate-500 mt-1 line-clamp-2">
-                              {entry.koreanDefinition}
-                            </p>
-                          </td>
-                          <td className="py-4 px-4 align-top text-xs text-slate-500 whitespace-nowrap">
-                            <p className="text-slate-700">{entry.hanjaOrigin}</p>
-                            <p className="mt-0.5">
-                              {entry.partOfSpeech} · {entry.topikLevel}
-                            </p>
-                          </td>
-                          <td className="py-4 px-4 align-top max-w-md">
-                            {entry.examples.slice(0, 2).map((ex, i) => (
-                              <div key={i} className="mb-2 last:mb-0 text-xs">
-                                <p className="font-korean font-medium text-slate-800 truncate">
-                                  0{i + 1}. {ex.koreanSentence}
-                                </p>
-                                <p className="text-slate-500 truncate">
-                                  → {ex.vietnameseMeaning}
-                                </p>
-                              </div>
-                            ))}
-                          </td>
-                          <td className="py-4 px-4 align-top text-right whitespace-nowrap">
-                            <div className="inline-flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCurrentEntry(entry);
-                                  setSearchInput(entry.koreanWord);
-                                  setActiveTab("workspace");
-                                }}
-                                className="px-3 py-1.5 text-xs font-semibold text-[#1D4ED8] bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                              >
-                                Mở chi tiết
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteEntry(entry.id)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 rounded-md transition-colors"
-                                aria-label="Xóa từ vựng"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                          {tab.label}
+                        </button>
                       ))}
-                    </tbody>
-                  </table>
+                    </div>
+
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={notebookQuery}
+                        onChange={(e) => setNotebookQuery(e.target.value)}
+                        placeholder="Lọc từ Hàn hoặc nghĩa Việt..."
+                        className="pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#1D4ED8] w-52"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+
+                {/* Word Selection Panel (Max 10 Words) for Elimination Card Game */}
+                <section className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-4">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 text-xs font-mono font-semibold text-[#1D4ED8] tabular-nums">
+                        <span>CHỌN TỪ VỰNG LUYỆN GHÉP &amp; XÓA THẺ</span>
+                        <span>·</span>
+                        <span>
+                          ĐÃ CHỌN{" "}
+                          {
+                            savedEntries.filter((e) =>
+                              selectedNotebookIds.includes(e.id)
+                            ).length
+                          }{" "}
+                          / 10 TỪ (TỐI ĐA 10 TỪ)
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        1. Đưa ra 1 nghĩa tiếng Việt mục tiêu · 2. Hiển thị các thẻ từ tiếng Hàn (bấm vào thẻ nào sẽ giải thích nghĩa từ đó) · 3. Chọn đúng nghĩa sẽ xóa thẻ đó đi · 4. Tiếp tục đến khi hết thẻ.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectionLimitNotice(null);
+                          setSelectedNotebookIds(
+                            filteredNotebookEntries
+                              .slice(0, 10)
+                              .map((item) => item.id)
+                          );
+                        }}
+                        className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        Chọn nhanh 10 từ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectionLimitNotice(null);
+                          setSelectedNotebookIds(
+                            filteredNotebookEntries
+                              .slice(0, 5)
+                              .map((item) => item.id)
+                          );
+                        }}
+                        className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        Chọn 5 từ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectionLimitNotice(null);
+                          setSelectedNotebookIds([]);
+                        }}
+                        className="px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors whitespace-nowrap"
+                      >
+                        Bỏ chọn
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          savedEntries.filter((e) =>
+                            selectedNotebookIds.includes(e.id)
+                          ).length === 0
+                        }
+                        onClick={() => setIsPlayingNotebookGame(true)}
+                        className="px-4 py-2 bg-[#1D4ED8] hover:bg-[#1E40AF] disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>
+                          Bắt Đầu Ghép &amp; Xóa Thẻ (
+                          {
+                            savedEntries.filter((e) =>
+                              selectedNotebookIds.includes(e.id)
+                            ).length
+                          }{" "}
+                          từ)
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Selected Words Preview Row */}
+                  <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-400">Các từ đang chọn:</span>
+                    {savedEntries.filter((e) =>
+                      selectedNotebookIds.includes(e.id)
+                    ).length === 0 ? (
+                      <span className="text-slate-500">
+                        Chưa chọn từ nào. Hãy tích chọn các từ trong bảng bên dưới (tối đa 10 từ).
+                      </span>
+                    ) : (
+                      savedEntries
+                        .filter((e) => selectedNotebookIds.includes(e.id))
+                        .slice(0, 10)
+                        .map((item, index) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() =>
+                              handleToggleSelectNotebookWord(item.id)
+                            }
+                            className="px-2.5 py-1 bg-blue-50/80 hover:bg-blue-100 border border-blue-200 text-[#1D4ED8] rounded-md font-korean font-medium flex items-center gap-1.5 transition-colors"
+                            title="Nhấp để bỏ chọn từ này"
+                          >
+                            <span className="font-mono text-[11px] text-blue-500">
+                              {index + 1}.
+                            </span>
+                            <span>{item.koreanWord}</span>
+                            <span className="text-blue-400 hover:text-blue-800">
+                              ×
+                            </span>
+                          </button>
+                        ))
+                    )}
+                  </div>
+
+                  {selectionLimitNotice && (
+                    <p className="text-xs font-medium text-amber-700">
+                      {selectionLimitNotice}
+                    </p>
+                  )}
+                </section>
+
+                {filteredNotebookEntries.length === 0 ? (
+                  <div className="bg-white border border-slate-200 rounded-xl p-12 text-center space-y-3">
+                    <p className="text-base font-semibold text-slate-900">
+                      Không tìm thấy từ vựng phù hợp
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Hãy thử thay đổi bộ lọc hoặc tra cứu thêm từ mới với Gemini AI.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-600">
+                            <th className="py-3.5 pl-5 pr-2 w-28">
+                              Chọn (≤10)
+                            </th>
+                            <th className="py-3.5 px-4">Từ vựng (Hangul)</th>
+                            <th className="py-3.5 px-4">
+                              Nghĩa tiếng Việt &amp; Định nghĩa Hàn
+                            </th>
+                            <th className="py-3.5 px-4">Hán-Hàn · TOPIK</th>
+                            <th className="py-3.5 px-4">2 Câu Ví Dụ Song Ngữ</th>
+                            <th className="py-3.5 px-4 text-right">Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-sm">
+                          {filteredNotebookEntries.map((entry) => {
+                            const isChecked = selectedNotebookIds.includes(
+                              entry.id
+                            );
+                            return (
+                              <tr
+                                key={entry.id}
+                                className={`transition-colors ${
+                                  isChecked
+                                    ? "bg-blue-50/30 hover:bg-blue-50/50"
+                                    : "hover:bg-slate-50/80"
+                                }`}
+                              >
+                                <td className="py-4 pl-5 pr-2 align-top whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleToggleSelectNotebookWord(entry.id)
+                                    }
+                                    className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border transition-colors ${
+                                      isChecked
+                                        ? "bg-[#1D4ED8] border-[#1D4ED8] text-white"
+                                        : "bg-white border-slate-300 text-slate-600 hover:border-[#1D4ED8]"
+                                    }`}
+                                  >
+                                    {isChecked ? (
+                                      <>
+                                        <CheckSquare className="w-3.5 h-3.5" />
+                                        <span>Đã chọn</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Square className="w-3.5 h-3.5" />
+                                        <span>Chọn</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </td>
+                                <td className="py-4 px-4 align-top whitespace-nowrap">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCurrentEntry(entry);
+                                      setSearchInput(entry.koreanWord);
+                                      setActiveTab("workspace");
+                                    }}
+                                    className="text-left group"
+                                  >
+                                    <span className="text-lg font-korean-serif font-semibold text-slate-900 group-hover:text-[#1D4ED8] block">
+                                      {entry.koreanWord}
+                                    </span>
+                                    <span className="text-xs font-mono text-slate-400">
+                                      [{entry.romanization}]
+                                    </span>
+                                  </button>
+                                </td>
+                                <td className="py-4 px-4 align-top max-w-xs">
+                                  <p className="font-semibold text-slate-900 text-xs">
+                                    {entry.vietnameseMeaning}
+                                  </p>
+                                  <p className="text-xs font-korean text-slate-500 mt-1 line-clamp-2">
+                                    {entry.koreanDefinition}
+                                  </p>
+                                </td>
+                                <td className="py-4 px-4 align-top text-xs text-slate-500 whitespace-nowrap">
+                                  <p className="text-slate-700">
+                                    {entry.hanjaOrigin}
+                                  </p>
+                                  <p className="mt-0.5">
+                                    {entry.partOfSpeech} · {entry.topikLevel}
+                                  </p>
+                                </td>
+                                <td className="py-4 px-4 align-top max-w-md">
+                                  {entry.examples.slice(0, 2).map((ex, i) => (
+                                    <div
+                                      key={i}
+                                      className="mb-2 last:mb-0 text-xs"
+                                    >
+                                      <p className="font-korean font-medium text-slate-800 truncate">
+                                        0{i + 1}. {ex.koreanSentence}
+                                      </p>
+                                      <p className="text-slate-500 truncate">
+                                        → {ex.vietnameseMeaning}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </td>
+                                <td className="py-4 px-4 align-top text-right whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCurrentEntry(entry);
+                                        setSearchInput(entry.koreanWord);
+                                        setActiveTab("workspace");
+                                      }}
+                                      className="px-3 py-1.5 text-xs font-semibold text-[#1D4ED8] bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                    >
+                                      Mở chi tiết
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleDeleteEntry(entry.id)
+                                      }
+                                      className="p-1.5 text-slate-400 hover:text-red-600 rounded-md transition-colors"
+                                      aria-label="Xóa từ vựng"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -1489,17 +1712,28 @@ export default function App() {
                   <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
                     <button
                       type="button"
-                      onClick={() => setActiveTab("notebook")}
+                      onClick={() => {
+                        setIsPlayingNotebookGame(false);
+                        setActiveTab("notebook");
+                      }}
                       className="text-slate-600 hover:text-slate-900 font-medium"
                     >
-                      Xem toàn bộ sổ từ →
+                      Chọn từ &amp; Ghép xóa thẻ (≤10) →
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveTab("ui-blueprint")}
-                      className="text-[#1D4ED8] hover:underline font-medium"
+                      onClick={() => {
+                        if (selectedNotebookIds.length === 0) {
+                          setSelectedNotebookIds(
+                            savedEntries.slice(0, 6).map((item) => item.id)
+                          );
+                        }
+                        setIsPlayingNotebookGame(true);
+                        setActiveTab("notebook");
+                      }}
+                      className="text-[#1D4ED8] hover:underline font-semibold"
                     >
-                      Sơ đồ thiết kế UI
+                      Chơi xóa thẻ ngay
                     </button>
                   </div>
                 </div>
