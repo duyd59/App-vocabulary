@@ -1,0 +1,6 @@
+{
+  "name": "HanViệt Lexicon — Học Từ Vựng Tiếng Hàn Qua Ngữ Cảnh AI",
+  "description": "Ứng dụng học từ vựng tiếng Hàn - tiếng Việt thông minh sử dụng Gemini AI để phân tích từ vựng, âm Hán Việt và tạo 2 câu ví dụ song ngữ Hàn - Việt kèm giải nghĩa chi tiết.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
