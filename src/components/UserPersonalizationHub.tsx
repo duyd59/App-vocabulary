@@ -22,6 +22,7 @@ import {
 interface UserPersonalizationHubProps {
   userProfile: UserProfileData | null;
   isAuthLoading: boolean;
+  authError?: string | null;
   savedEntries: VocabularyEntry[];
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
@@ -125,6 +126,7 @@ const COMMERCIAL_PLANS: {
 export const UserPersonalizationHub: React.FC<UserPersonalizationHubProps> = ({
   userProfile,
   isAuthLoading,
+  authError,
   savedEntries,
   onSignInGoogle,
   onSignOut,
@@ -257,6 +259,13 @@ export const UserPersonalizationHub: React.FC<UserPersonalizationHubProps> = ({
                 Tiếp tục tra cứu thử nghiệm
               </button>
             </div>
+
+            {authError && (
+              <div className="mt-4 p-4 rounded-xl bg-amber-50 border border-amber-200 text-left text-xs text-amber-900 space-y-1.5">
+                <p className="font-semibold">Hướng dẫn cấu hình tên miền đăng nhập:</p>
+                <p className="leading-relaxed">{authError}</p>
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">

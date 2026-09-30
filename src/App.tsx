@@ -47,6 +47,7 @@ import {
 } from "./services/geminiClient";
 import {
   auth,
+  activeFirebaseProjectId,
   signInWithGooglePopup,
   signOutCurrentUser,
   ensureUserProfileInCloud,
@@ -155,6 +156,7 @@ export default function App() {
   // Authenticated Google User & Personalization Profile State
   const [userProfile, setUserProfile] = useState<UserProfileData | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [personalNoteDraft, setPersonalNoteDraft] = useState<string>("");
   const [noteSavedFeedback, setNoteSavedFeedback] = useState<boolean>(false);
   const hasSeededCloudRef = useRef<string | null>(null);
@@ -241,10 +243,34 @@ export default function App() {
 
   const handleSignInWithGoogle = async () => {
     setIsAuthLoading(true);
+    setAuthError(null);
     try {
       await signInWithGooglePopup();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Google sign-in error:", err);
+      const code =
+        typeof err === "object" && err !== null && "code" in err
+          ? String((err as { code?: string }).code)
+          : "";
+      const currentHost =
+        typeof window !== "undefined" ? window.location.hostname : "domain-cua-ban.com";
+
+      if (code === "auth/unauthorized-domain") {
+        setAuthError(
+          `Tên miền "${currentHost}" chưa được khai báo trong dự án Firebase hiện tại ("${activeFirebaseProjectId}"). Hãy mở đúng dự án "${activeFirebaseProjectId}" trên Firebase Console → Authentication → Settings → Authorized domains (승인된 도메인) và thêm "${currentHost}".`
+        );
+        setActiveTab("account-pro");
+      } else if (code === "auth/popup-blocked") {
+        setAuthError(
+          "Trình duyệt đã chặn cửa sổ bật lên (Popup). Vui lòng cho phép mở Popup trên trình duyệt rồi bấm Đăng nhập lại."
+        );
+      } else if (code !== "auth/popup-closed-by-user") {
+        setAuthError(
+          err instanceof Error
+            ? err.message
+            : "Không thể hoàn tất đăng nhập Google. Vui lòng thử lại."
+        );
+      }
     } finally {
       setIsAuthLoading(false);
     }
@@ -870,6 +896,7 @@ export default function App() {
           <UserPersonalizationHub
             userProfile={userProfile}
             isAuthLoading={isAuthLoading}
+            authError={authError}
             savedEntries={savedEntries}
             onSignInGoogle={handleSignInWithGoogle}
             onSignOut={handleSignOutUser}
