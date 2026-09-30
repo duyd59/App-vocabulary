@@ -1,0 +1,256 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Personalized learning profile, study goals, streak analytics, and commercial subscription tier for an authenticated user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The unique Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name from Google profile or custom study nickname.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified Google account email address of the user.",
+          "minLength": 3,
+          "maxLength": 150
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Avatar URL from Google account.",
+          "maxLength": 500
+        },
+        "targetTopikLevel": {
+          "type": "string",
+          "description": "Learner's target Korean proficiency level for personalized AI examples.",
+          "enum": [
+            "TOPIK I - Cấp 1-2",
+            "TOPIK II - Cấp 3-4",
+            "TOPIK II - Cấp 5-6",
+            "Giao tiếp Thương mại"
+          ],
+          "maxLength": 60
+        },
+        "preferredContextStyle": {
+          "type": "string",
+          "description": "Default AI sentence generation context style for this learner.",
+          "enum": ["daily", "topik", "business", "culture"],
+          "maxLength": 20
+        },
+        "dailyGoalWords": {
+          "type": "integer",
+          "description": "Target number of Korean words to master per day (between 3 and 50)."
+        },
+        "streakDays": {
+          "type": "integer",
+          "description": "Consecutive study days completed by the user."
+        },
+        "totalLookups": {
+          "type": "integer",
+          "description": "Cumulative count of AI vocabulary lookups performed by the user."
+        },
+        "totalSentencesChecked": {
+          "type": "integer",
+          "description": "Cumulative count of practice Korean sentences checked by AI."
+        },
+        "totalGamesCleared": {
+          "type": "integer",
+          "description": "Cumulative count of 10-word elimination games completed."
+        },
+        "subscriptionTier": {
+          "type": "string",
+          "description": "Commercial membership tier of the user.",
+          "enum": ["free", "pro", "enterprise"],
+          "maxLength": 20
+        },
+        "lastStudyDate": {
+          "type": "string",
+          "description": "ISO date string (YYYY-MM-DD) of the most recent study activity.",
+          "maxLength": 30
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user profile was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user profile was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "email",
+        "photoURL",
+        "targetTopikLevel",
+        "preferredContextStyle",
+        "dailyGoalWords",
+        "streakDays",
+        "totalLookups",
+        "totalSentencesChecked",
+        "totalGamesCleared",
+        "subscriptionTier",
+        "lastStudyDate",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SavedVocabularyItem": {
+      "title": "SavedVocabularyItem",
+      "description": "A Korean-Vietnamese vocabulary word with 2 bilingual AI example sentences, mastery status, and personal study notes saved in the user's cloud notebook.",
+      "type": "object",
+      "properties": {
+        "vocabId": {
+          "type": "string",
+          "description": "Unique document identifier for the saved vocabulary entry.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID matching the parent user document.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "koreanWord": {
+          "type": "string",
+          "description": "Korean Hangul headword in dictionary form.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "romanization": {
+          "type": "string",
+          "description": "Revised Romanization of the Korean word.",
+          "maxLength": 200
+        },
+        "vietnamesePronunciation": {
+          "type": "string",
+          "description": "Vietnamese phonetic approximation.",
+          "maxLength": 200
+        },
+        "partOfSpeech": {
+          "type": "string",
+          "description": "Bilingual Korean-Vietnamese part of speech.",
+          "maxLength": 100
+        },
+        "topikLevel": {
+          "type": "string",
+          "description": "Estimated TOPIK level.",
+          "maxLength": 100
+        },
+        "hanjaOrigin": {
+          "type": "string",
+          "description": "Hanja characters and Sino-Vietnamese reading or native Korean indicator.",
+          "maxLength": 200
+        },
+        "vietnameseMeaning": {
+          "type": "string",
+          "description": "Primary Vietnamese meaning.",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "koreanDefinition": {
+          "type": "string",
+          "description": "Korean dictionary definition.",
+          "maxLength": 1000
+        },
+        "vietnameseExplanation": {
+          "type": "string",
+          "description": "Detailed Vietnamese explanation of usage and cultural nuance.",
+          "maxLength": 2000
+        },
+        "masteryLevel": {
+          "type": "string",
+          "description": "Learner's current mastery state for this word.",
+          "enum": ["learning", "reviewing", "mastered"],
+          "maxLength": 20
+        },
+        "personalNote": {
+          "type": "string",
+          "description": "Custom personal mnemonic or note written by the learner.",
+          "maxLength": 1000
+        },
+        "isSelectedForGame": {
+          "type": "boolean",
+          "description": "Whether this word is currently selected for the 10-word elimination game."
+        },
+        "synonyms": {
+          "type": "array",
+          "description": "Up to 10 Korean synonyms with brief Vietnamese meanings."
+        },
+        "antonyms": {
+          "type": "array",
+          "description": "Up to 10 Korean antonyms with brief Vietnamese meanings."
+        },
+        "collocations": {
+          "type": "array",
+          "description": "Up to 10 common Korean-Vietnamese collocation objects."
+        },
+        "examples": {
+          "type": "array",
+          "description": "Bilingual Korean-Vietnamese example sentence objects generated by Gemini AI."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the vocabulary item was saved."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the vocabulary item was last updated."
+        }
+      },
+      "required": [
+        "vocabId",
+        "userId",
+        "koreanWord",
+        "romanization",
+        "vietnamesePronunciation",
+        "partOfSpeech",
+        "topikLevel",
+        "hanjaOrigin",
+        "vietnameseMeaning",
+        "koreanDefinition",
+        "vietnameseExplanation",
+        "masteryLevel",
+        "personalNote",
+        "isSelectedForGame",
+        "synonyms",
+        "antonyms",
+        "collocations",
+        "examples",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Private user profile, study goals, streak metrics, and commercial plan settings strictly accessible only by the authenticated owner."
+    },
+    "/users/{userId}/vocabularies/{vocabId}": {
+      "schema": {
+        "$ref": "#/entities/SavedVocabularyItem"
+      },
+      "description": "User-owned subcollection of saved Korean-Vietnamese vocabulary items, bilingual examples, mastery states, and personal notes."
+    }
+  }
+}

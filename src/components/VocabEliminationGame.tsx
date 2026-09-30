@@ -20,6 +20,7 @@ interface VocabEliminationGameProps {
   selectedWords: VocabularyEntry[];
   onExitToNotebook: () => void;
   onInspectInWorkspace: (entry: VocabularyEntry) => void;
+  onGameCompleted?: () => void;
 }
 
 function shuffleArray<T>(items: T[]): T[] {
@@ -35,6 +36,7 @@ export const VocabEliminationGame: React.FC<VocabEliminationGameProps> = ({
   selectedWords,
   onExitToNotebook,
   onInspectInWorkspace,
+  onGameCompleted,
 }) => {
   // Remaining Korean cards on the board
   const [remainingCards, setRemainingCards] = useState<VocabularyEntry[]>([]);
@@ -122,6 +124,7 @@ export const VocabEliminationGame: React.FC<VocabEliminationGameProps> = ({
       setCorrectCount((prev) => prev + 1);
       setClearedHistory((prev) => [card, ...prev]);
 
+      const willFinish = remainingCards.length === 1;
       setTimeout(() => {
         setRemainingCards((prev) => {
           const nextRemaining = prev.filter((item) => item.id !== card.id);
@@ -135,6 +138,9 @@ export const VocabEliminationGame: React.FC<VocabEliminationGameProps> = ({
           return nextRemaining;
         });
         setRemovingCardId(null);
+        if (willFinish && onGameCompleted) {
+          onGameCompleted();
+        }
       }, 450);
     } else {
       // Wrong match! Show the explanation of the clicked card so the user learns what it means

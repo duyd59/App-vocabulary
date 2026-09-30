@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   Search,
   Volume2,
@@ -18,12 +19,16 @@ import {
   Play,
   CheckSquare,
   Square,
+  Crown,
 } from "lucide-react";
 import {
   VocabularyEntry,
   ContextStyle,
   ActiveViewTab,
   SentenceCheckResult,
+  UserProfileData,
+  TargetTopikGoal,
+  SubscriptionTier,
 } from "./types/vocabulary";
 import {
   INITIAL_CURATED_VOCABULARY,
@@ -34,11 +39,24 @@ import { HangulKeyboard } from "./components/HangulKeyboard";
 import { UILayoutBlueprint } from "./components/UILayoutBlueprint";
 import { FlashcardTrainer } from "./components/FlashcardTrainer";
 import { VocabEliminationGame } from "./components/VocabEliminationGame";
+import { UserPersonalizationHub } from "./components/UserPersonalizationHub";
 import {
   analyzeVocabularyWithAI,
   checkSentenceWithAI,
   generateTopicDeckWithAI,
 } from "./services/geminiClient";
+import {
+  auth,
+  signInWithGooglePopup,
+  signOutCurrentUser,
+  ensureUserProfileInCloud,
+  updateUserPreferencesInCloud,
+  incrementUserStudyStatsInCloud,
+  saveVocabularyEntryToCloud,
+  updateVocabularyMetaInCloud,
+  deleteVocabularyFromCloud,
+  subscribeToUserVocabularies,
+} from "./firebase";
 
 const STORAGE_KEY = "hanviet_lexicon_saved_v1";
 
@@ -134,6 +152,186 @@ export default function App() {
   const [aiTopicInput, setAiTopicInput] = useState("");
   const [isGeneratingDeck, setIsGeneratingDeck] = useState(false);
 
+  // Authenticated Google User & Personalization Profile State
+  const [userProfile, setUserProfile] = useState<UserProfileData | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [personalNoteDraft, setPersonalNoteDraft] = useState<string>("");
+  const [noteSavedFeedback, setNoteSavedFeedback] = useState<boolean>(false);
+  const hasSeededCloudRef = useRef<string | null>(null);
+
+  // Sync personalNoteDraft whenever currentEntry changes
+  useEffect(() => {
+    const matchedSaved = savedEntries.find(
+      (item) => item.koreanWord === currentEntry.koreanWord
+    );
+    setPersonalNoteDraft(
+      matchedSaved?.personalNote ?? currentEntry.personalNote ?? ""
+    );
+    setNoteSavedFeedback(false);
+  }, [currentEntry.koreanWord, savedEntries]);
+
+  // Listen to Google Auth state and attach real-time Firestore vocabulary listener per user
+  useEffect(() => {
+    let unsubscribeVocab: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (unsubscribeVocab) {
+        unsubscribeVocab();
+        unsubscribeVocab = null;
+      }
+
+      if (!firebaseUser) {
+        setUserProfile(null);
+        setIsAuthLoading(false);
+        return;
+      }
+
+      setIsAuthLoading(true);
+      try {
+        const profile = await ensureUserProfileInCloud(firebaseUser);
+        setUserProfile(profile);
+        setContextStyle(profile.preferredContextStyle);
+
+        unsubscribeVocab = subscribeToUserVocabularies(
+          profile.uid,
+          async (cloudItems) => {
+            if (
+              cloudItems.length === 0 &&
+              hasSeededCloudRef.current !== profile.uid
+            ) {
+              hasSeededCloudRef.current = profile.uid;
+              // Seed user's initial vocabulary items into their private cloud notebook
+              const seedList = savedEntries.slice(0, 8);
+              for (let i = 0; i < seedList.length; i++) {
+                await saveVocabularyEntryToCloud(
+                  profile.uid,
+                  seedList[i],
+                  i < 6
+                );
+              }
+              return;
+            }
+
+            if (cloudItems.length > 0) {
+              setSavedEntries(cloudItems);
+              const cloudSelectedIds = cloudItems
+                .filter((item) => item.isSelectedForGame)
+                .map((item) => item.id)
+                .slice(0, 10);
+              if (cloudSelectedIds.length > 0) {
+                setSelectedNotebookIds(cloudSelectedIds);
+              }
+            }
+          }
+        );
+      } catch (err) {
+        console.error("Failed to initialize user profile:", err);
+      } finally {
+        setIsAuthLoading(false);
+      }
+    });
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeVocab) {
+        unsubscribeVocab();
+      }
+    };
+  }, []);
+
+  const handleSignInWithGoogle = async () => {
+    setIsAuthLoading(true);
+    try {
+      await signInWithGooglePopup();
+    } catch (err) {
+      console.error("Google sign-in error:", err);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleSignOutUser = async () => {
+    setIsAuthLoading(true);
+    try {
+      await signOutCurrentUser();
+      setUserProfile(null);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleSaveUserPreferences = async (updates: {
+    displayName: string;
+    photoURL: string;
+    targetTopikLevel: TargetTopikGoal;
+    preferredContextStyle: ContextStyle;
+    dailyGoalWords: number;
+    subscriptionTier: SubscriptionTier;
+  }) => {
+    if (!userProfile) return;
+    await updateUserPreferencesInCloud(userProfile.uid, updates);
+    setUserProfile((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...updates,
+          }
+        : null
+    );
+    setContextStyle(updates.preferredContextStyle);
+  };
+
+  const handleRecordUserMetric = async (
+    metric: "lookup" | "sentence" | "game"
+  ) => {
+    if (!userProfile) return;
+    try {
+      const updated = await incrementUserStudyStatsInCloud(userProfile, metric);
+      setUserProfile(updated);
+    } catch (err) {
+      console.error("Failed to record user study metric:", err);
+    }
+  };
+
+  const handleSavePersonalNoteForCurrent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedNote = personalNoteDraft.trim().slice(0, 1000);
+    const updatedEntry: VocabularyEntry = {
+      ...currentEntry,
+      personalNote: trimmedNote,
+    };
+    setCurrentEntry(updatedEntry);
+
+    setSavedEntries((prev) => {
+      const idx = prev.findIndex(
+        (item) => item.koreanWord === currentEntry.koreanWord
+      );
+      if (idx !== -1) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], personalNote: trimmedNote };
+        return copy;
+      }
+      return [updatedEntry, ...prev];
+    });
+
+    if (userProfile) {
+      const existing = savedEntries.find(
+        (item) => item.koreanWord === currentEntry.koreanWord
+      );
+      const targetEntry = existing
+        ? { ...existing, personalNote: trimmedNote }
+        : updatedEntry;
+      await saveVocabularyEntryToCloud(
+        userProfile.uid,
+        targetEntry,
+        selectedNotebookIds.includes(targetEntry.id)
+      );
+    }
+
+    setNoteSavedFeedback(true);
+    setTimeout(() => setNoteSavedFeedback(false), 2500);
+  };
+
   const handleGenerateTopicDeck = async (topicToGenerate: string) => {
     const trimmedTopic = topicToGenerate.trim();
     if (!trimmedTopic || isGeneratingDeck) return;
@@ -162,6 +360,8 @@ export default function App() {
             examples: Array.isArray(w.examples) ? w.examples.slice(0, 2) : [],
             createdAt: new Date().toISOString(),
             masteryLevel: "learning",
+            personalNote: "",
+            isSelectedForGame: true,
           })
         );
 
@@ -184,6 +384,13 @@ export default function App() {
           return Array.from(new Set(combined)).slice(0, 10);
         });
         setAiTopicInput("");
+
+        if (userProfile) {
+          for (const entry of generatedEntries) {
+            await saveVocabularyEntryToCloud(userProfile.uid, entry, true);
+          }
+          await handleRecordUserMetric("lookup");
+        }
       }
     } catch (err) {
       setSelectionLimitNotice(
@@ -199,8 +406,20 @@ export default function App() {
   const handleToggleSelectNotebookWord = (id: string) => {
     setSelectionLimitNotice(null);
     setSelectedNotebookIds((prev) => {
-      if (prev.includes(id)) {
-        return prev.filter((item) => item !== id);
+      const isCurrentlySelected = prev.includes(id);
+      if (isCurrentlySelected) {
+        const next = prev.filter((item) => item !== id);
+        if (userProfile) {
+          const target = savedEntries.find((item) => item.id === id);
+          if (target) {
+            updateVocabularyMetaInCloud(userProfile.uid, id, {
+              masteryLevel: target.masteryLevel || "learning",
+              personalNote: target.personalNote || "",
+              isSelectedForGame: false,
+            }).catch(() => {});
+          }
+        }
+        return next;
       }
       if (prev.length >= 10) {
         setSelectionLimitNotice(
@@ -208,7 +427,18 @@ export default function App() {
         );
         return prev;
       }
-      return [...prev, id];
+      const next = [...prev, id];
+      if (userProfile) {
+        const target = savedEntries.find((item) => item.id === id);
+        if (target) {
+          updateVocabularyMetaInCloud(userProfile.uid, id, {
+            masteryLevel: target.masteryLevel || "learning",
+            personalNote: target.personalNote || "",
+            isSelectedForGame: true,
+          }).catch(() => {});
+        }
+      }
+      return next;
     });
   };
 
@@ -224,17 +454,30 @@ export default function App() {
     (item) => item.koreanWord === currentEntry.koreanWord
   );
 
-  const handleToggleSaveCurrent = () => {
+  const handleToggleSaveCurrent = async () => {
     if (isCurrentSaved) {
+      const target = savedEntries.find(
+        (item) => item.koreanWord === currentEntry.koreanWord
+      );
       setSavedEntries((prev) =>
         prev.filter((item) => item.koreanWord !== currentEntry.koreanWord)
       );
+      if (userProfile && target) {
+        await deleteVocabularyFromCloud(userProfile.uid, target.id);
+      }
     } else {
       setSavedEntries((prev) => [currentEntry, ...prev]);
+      if (userProfile) {
+        await saveVocabularyEntryToCloud(
+          userProfile.uid,
+          currentEntry,
+          selectedNotebookIds.includes(currentEntry.id)
+        );
+      }
     }
   };
 
-  const handleUpdateMastery = (
+  const handleUpdateMastery = async (
     id: string,
     level: "learning" | "reviewing" | "mastered"
   ) => {
@@ -246,10 +489,23 @@ export default function App() {
     if (currentEntry.id === id) {
       setCurrentEntry((prev) => ({ ...prev, masteryLevel: level }));
     }
+    if (userProfile) {
+      const target = savedEntries.find((item) => item.id === id);
+      if (target) {
+        await updateVocabularyMetaInCloud(userProfile.uid, id, {
+          masteryLevel: level,
+          personalNote: target.personalNote || "",
+          isSelectedForGame: selectedNotebookIds.includes(id),
+        });
+      }
+    }
   };
 
-  const handleDeleteEntry = (id: string) => {
+  const handleDeleteEntry = async (id: string) => {
     setSavedEntries((prev) => prev.filter((item) => item.id !== id));
+    if (userProfile) {
+      await deleteVocabularyFromCloud(userProfile.uid, id);
+    }
   };
 
   const handlePlayAudio = async (
@@ -307,6 +563,19 @@ export default function App() {
       setCurrentEntry(newEntry);
       setSearchInput(newEntry.koreanWord);
 
+      const matchedExisting = savedEntries.find(
+        (item) => item.koreanWord === newEntry.koreanWord
+      );
+      const entryToPersist: VocabularyEntry = matchedExisting
+        ? {
+            ...newEntry,
+            id: matchedExisting.id,
+            masteryLevel: matchedExisting.masteryLevel || "learning",
+            personalNote: matchedExisting.personalNote || "",
+            isSelectedForGame: matchedExisting.isSelectedForGame,
+          }
+        : newEntry;
+
       // Update or prepend in savedEntries so user history is preserved
       setSavedEntries((prev) => {
         const existingIdx = prev.findIndex(
@@ -314,15 +583,20 @@ export default function App() {
         );
         if (existingIdx !== -1) {
           const updated = [...prev];
-          updated[existingIdx] = {
-            ...newEntry,
-            id: prev[existingIdx].id,
-            masteryLevel: prev[existingIdx].masteryLevel || "learning",
-          };
+          updated[existingIdx] = entryToPersist;
           return updated;
         }
-        return [newEntry, ...prev];
+        return [entryToPersist, ...prev];
       });
+
+      if (userProfile) {
+        await saveVocabularyEntryToCloud(
+          userProfile.uid,
+          entryToPersist,
+          selectedNotebookIds.includes(entryToPersist.id)
+        );
+        await handleRecordUserMetric("lookup");
+      }
     } catch (err) {
       const msg =
         err instanceof Error
@@ -352,6 +626,9 @@ export default function App() {
         practiceSentence.trim()
       );
       setSentenceCheckResult(data);
+      if (userProfile) {
+        await handleRecordUserMetric("sentence");
+      }
     } catch (err) {
       setSentenceCheckError(
         err instanceof Error ? err.message : "Lỗi khi chấm câu với Gemini AI."
@@ -486,22 +763,22 @@ export default function App() {
             Khám phá TOPIK
           </a>
           <a
-            href="#ui-blueprint"
+            href="#account-pro"
             onClick={(e) => {
               e.preventDefault();
-              setActiveTab("ui-blueprint");
+              setActiveTab("account-pro");
             }}
             className={`py-1 transition-colors whitespace-nowrap ${
-              activeTab === "ui-blueprint"
+              activeTab === "account-pro"
                 ? "text-slate-900 underline decoration-[#1D4ED8] decoration-2 underline-offset-8 font-semibold"
                 : "hover:text-slate-900"
             }`}
           >
-            Bản thiết kế UI
+            Hồ sơ &amp; Gói Pro
           </a>
         </nav>
 
-        {/* Zone 3: 1-2 primary actions */}
+        {/* Zone 3: 1-2 primary actions (Hangul Keyboard + Google Account / Commercial Pro CTA) */}
         <div className="flex items-center gap-2.5">
           <button
             type="button"
@@ -516,19 +793,47 @@ export default function App() {
             }`}
           >
             <Keyboard className="w-3.5 h-3.5" />
-            <span>Bàn phím Hangul</span>
+            <span className="hidden sm:inline">Bàn phím Hangul</span>
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              setActiveTab(
-                activeTab === "ui-blueprint" ? "workspace" : "ui-blueprint"
-              )
-            }
-            className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-          >
-            {activeTab === "ui-blueprint" ? "Về trang tra cứu" : "Xem Bố Cục UI"}
-          </button>
+
+          {userProfile ? (
+            <button
+              type="button"
+              onClick={() => setActiveTab("account-pro")}
+              className="px-3.5 py-1.5 text-xs font-semibold text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
+            >
+              {userProfile.photoURL ? (
+                <img
+                  src={userProfile.photoURL}
+                  alt={userProfile.displayName}
+                  referrerPolicy="no-referrer"
+                  className="w-5 h-5 rounded-full object-cover"
+                />
+              ) : (
+                <Crown className="w-3.5 h-3.5 text-[#1D4ED8]" />
+              )}
+              <span className="max-w-[120px] truncate">
+                {userProfile.displayName}
+              </span>
+              <span className="font-mono text-[10px] text-[#1D4ED8] uppercase">
+                · {userProfile.subscriptionTier}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={isAuthLoading}
+              onClick={handleSignInWithGoogle}
+              className="px-4 py-2 text-xs font-semibold text-white bg-[#1D4ED8] hover:bg-[#1E40AF] disabled:opacity-60 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                <path d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.81-3.5 5.44-6.5 5.44C8.36 19.27 5 15.65 5 12c0-3.65 3.36-7.27 7.2-7.27 3.09 0 4.9 1.97 4.9 1.97L19 4.72S16.56 2 12.1 2C6.42 2 2.03 6.8 2.03 12c0 5.05 4.13 10 10.22 10 5.35 0 9.25-3.67 9.25-9.09 0-1.15-.15-1.81-.15-1.81Z" />
+              </svg>
+              <span>
+                {isAuthLoading ? "Đang kết nối..." : "Đăng nhập Google"}
+              </span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -540,6 +845,7 @@ export default function App() {
             { id: "notebook", label: `Sổ từ (${savedEntries.length})` },
             { id: "flashcards", label: "Flashcard" },
             { id: "topik", label: "TOPIK" },
+            { id: "account-pro", label: "Hồ sơ & Gói Pro" },
             { id: "ui-blueprint", label: "Bố cục UI" },
           ] as const
         ).map((tab) => (
@@ -560,6 +866,18 @@ export default function App() {
 
       {/* Main Content Container (1440px Desktop Presence) */}
       <main className="flex-1 w-full max-w-[1360px] mx-auto px-4 sm:px-8 pt-7 pb-16">
+        {activeTab === "account-pro" && (
+          <UserPersonalizationHub
+            userProfile={userProfile}
+            isAuthLoading={isAuthLoading}
+            savedEntries={savedEntries}
+            onSignInGoogle={handleSignInWithGoogle}
+            onSignOut={handleSignOutUser}
+            onSavePreferences={handleSaveUserPreferences}
+            onNavigateTab={setActiveTab}
+          />
+        )}
+
         {activeTab === "ui-blueprint" && (
           <UILayoutBlueprint
             onNavigateTab={setActiveTab}
@@ -667,6 +985,7 @@ export default function App() {
                   setIsPlayingNotebookGame(false);
                   setActiveTab("workspace");
                 }}
+                onGameCompleted={() => handleRecordUserMetric("game")}
               />
             ) : (
               <>
@@ -1366,6 +1685,33 @@ export default function App() {
                           </p>
                         </div>
                       </div>
+
+                      {/* Personal Study Note per User (Synced to Cloud Firestore) */}
+                      <form
+                        onSubmit={handleSavePersonalNoteForCurrent}
+                        className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center gap-2.5"
+                      >
+                        <input
+                          type="text"
+                          maxLength={1000}
+                          value={personalNoteDraft}
+                          onChange={(e) => setPersonalNoteDraft(e.target.value)}
+                          placeholder={
+                            userProfile
+                              ? `Ghi chú cá nhân của ${userProfile.displayName} cho từ "${currentEntry.koreanWord}" (tự động đồng bộ đám mây)...`
+                              : `Thêm ghi chú cá nhân / mẹo nhớ riêng cho từ "${currentEntry.koreanWord}"...`
+                          }
+                          className="flex-1 px-3.5 py-2 text-xs bg-slate-50 focus:bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#1D4ED8]"
+                        />
+                        <button
+                          type="submit"
+                          className="px-3.5 py-2 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                        >
+                          {noteSavedFeedback
+                            ? "✓ Đã lưu ghi chú"
+                            : "Lưu ghi chú riêng"}
+                        </button>
+                      </form>
                     </article>
 
                     {/* 2. THE CORE REQUIREMENT: 2 AI-GENERATED BILINGUAL EXAMPLE SENTENCES */}

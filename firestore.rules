@@ -1,0 +1,308 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // =========================================================================
+    // Entity Validation Blueprints
+    // =========================================================================
+    function isValidUserProfile(data) {
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'targetTopikLevel',
+          'preferredContextStyle',
+          'dailyGoalWords',
+          'streakDays',
+          'totalLookups',
+          'totalSentencesChecked',
+          'totalGamesCleared',
+          'subscriptionTier',
+          'lastStudyDate',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'targetTopikLevel',
+          'preferredContextStyle',
+          'dailyGoalWords',
+          'streakDays',
+          'totalLookups',
+          'totalSentencesChecked',
+          'totalGamesCleared',
+          'subscriptionTier',
+          'lastStudyDate',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.uid == request.auth.uid
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 150
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.targetTopikLevel is string && data.targetTopikLevel.size() <= 60
+        && data.targetTopikLevel in [
+          'TOPIK I - Cấp 1-2',
+          'TOPIK II - Cấp 3-4',
+          'TOPIK II - Cấp 5-6',
+          'Giao tiếp Thương mại'
+        ]
+        && data.preferredContextStyle is string && data.preferredContextStyle.size() <= 20
+        && data.preferredContextStyle in ['daily', 'topik', 'business', 'culture']
+        && data.dailyGoalWords is int && data.dailyGoalWords >= 1 && data.dailyGoalWords <= 100
+        && data.streakDays is int && data.streakDays >= 0 && data.streakDays <= 100000
+        && data.totalLookups is int && data.totalLookups >= 0 && data.totalLookups <= 10000000
+        && data.totalSentencesChecked is int && data.totalSentencesChecked >= 0 && data.totalSentencesChecked <= 10000000
+        && data.totalGamesCleared is int && data.totalGamesCleared >= 0 && data.totalGamesCleared <= 10000000
+        && data.subscriptionTier is string && data.subscriptionTier.size() <= 20
+        && data.subscriptionTier in ['free', 'pro', 'enterprise']
+        && data.lastStudyDate is string && data.lastStudyDate.size() <= 30
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSavedVocabularyItem(data) {
+      return data.keys().hasAll([
+          'vocabId',
+          'userId',
+          'koreanWord',
+          'romanization',
+          'vietnamesePronunciation',
+          'partOfSpeech',
+          'topikLevel',
+          'hanjaOrigin',
+          'vietnameseMeaning',
+          'koreanDefinition',
+          'vietnameseExplanation',
+          'masteryLevel',
+          'personalNote',
+          'isSelectedForGame',
+          'synonyms',
+          'antonyms',
+          'collocations',
+          'examples',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'vocabId',
+          'userId',
+          'koreanWord',
+          'romanization',
+          'vietnamesePronunciation',
+          'partOfSpeech',
+          'topikLevel',
+          'hanjaOrigin',
+          'vietnameseMeaning',
+          'koreanDefinition',
+          'vietnameseExplanation',
+          'masteryLevel',
+          'personalNote',
+          'isSelectedForGame',
+          'synonyms',
+          'antonyms',
+          'collocations',
+          'examples',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && isValidId(data.vocabId)
+        && data.koreanWord is string && data.koreanWord.size() >= 1 && data.koreanWord.size() <= 120
+        && data.romanization is string && data.romanization.size() <= 200
+        && data.vietnamesePronunciation is string && data.vietnamesePronunciation.size() <= 200
+        && data.partOfSpeech is string && data.partOfSpeech.size() <= 100
+        && data.topikLevel is string && data.topikLevel.size() <= 100
+        && data.hanjaOrigin is string && data.hanjaOrigin.size() <= 200
+        && data.vietnameseMeaning is string && data.vietnameseMeaning.size() >= 1 && data.vietnameseMeaning.size() <= 500
+        && data.koreanDefinition is string && data.koreanDefinition.size() <= 1000
+        && data.vietnameseExplanation is string && data.vietnameseExplanation.size() <= 2000
+        && data.masteryLevel is string && data.masteryLevel.size() <= 20
+        && data.masteryLevel in ['learning', 'reviewing', 'mastered']
+        && data.personalNote is string && data.personalNote.size() <= 1000
+        && data.isSelectedForGame is bool
+        && data.synonyms is list && data.synonyms.size() <= 10
+        && (data.synonyms.size() == 0 || (data.synonyms[0] is string && data.synonyms[0].size() <= 200))
+        && data.antonyms is list && data.antonyms.size() <= 10
+        && (data.antonyms.size() == 0 || (data.antonyms[0] is string && data.antonyms[0].size() <= 200))
+        && data.collocations is list && data.collocations.size() <= 10
+        && (data.collocations.size() == 0 || data.collocations[0] is map)
+        && data.examples is list && data.examples.size() <= 5
+        && (data.examples.size() == 0 || data.examples[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection 1: /users/{userId} (UserProfile - Private PII Isolated)
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Update study preferences, goals, or commercial plan
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'photoURL',
+            'targetTopikLevel',
+            'preferredContextStyle',
+            'dailyGoalWords',
+            'subscriptionTier',
+            'updatedAt'
+          ])
+          ||
+          // Action 2: Increment study progress & streak analytics
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'streakDays',
+            'totalLookups',
+            'totalSentencesChecked',
+            'totalGamesCleared',
+            'lastStudyDate',
+            'updatedAt'
+          ])
+          ||
+          // Action 3: Full profile sync on sign-in
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'email',
+            'photoURL',
+            'targetTopikLevel',
+            'preferredContextStyle',
+            'dailyGoalWords',
+            'streakDays',
+            'totalLookups',
+            'totalSentencesChecked',
+            'totalGamesCleared',
+            'subscriptionTier',
+            'lastStudyDate',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // =======================================================================
+      // Subcollection 2: /users/{userId}/vocabularies/{vocabId}
+      // =======================================================================
+      match /vocabularies/{vocabId} {
+        allow get: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vocabId)
+          && (resource == null || existing().userId == request.auth.uid)
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow list: if isOwner(userId)
+          && existing().userId == request.auth.uid;
+
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vocabId)
+          && isValidSavedVocabularyItem(incoming())
+          && incoming().userId == userId
+          && incoming().vocabId == vocabId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vocabId)
+          && isValidSavedVocabularyItem(incoming())
+          && incoming().userId == existing().userId
+          && incoming().vocabId == existing().vocabId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            // Action 1: Update mastery level, personal note, or game selection state
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'masteryLevel',
+              'personalNote',
+              'isSelectedForGame',
+              'updatedAt'
+            ])
+            ||
+            // Action 2: Refresh AI analysis & examples for an existing word
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'koreanWord',
+              'romanization',
+              'vietnamesePronunciation',
+              'partOfSpeech',
+              'topikLevel',
+              'hanjaOrigin',
+              'vietnameseMeaning',
+              'koreanDefinition',
+              'vietnameseExplanation',
+              'masteryLevel',
+              'personalNote',
+              'isSelectedForGame',
+              'synonyms',
+              'antonyms',
+              'collocations',
+              'examples',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vocabId)
+          && existing().userId == request.auth.uid
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+  }
+}

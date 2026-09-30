@@ -1,10 +1,19 @@
 export type ContextStyle = "daily" | "topik" | "business" | "culture";
 
+export type TargetTopikGoal =
+  | "TOPIK I - Cấp 1-2"
+  | "TOPIK II - Cấp 3-4"
+  | "TOPIK II - Cấp 5-6"
+  | "Giao tiếp Thương mại";
+
+export type SubscriptionTier = "free" | "pro" | "enterprise";
+
 export type ActiveViewTab =
   | "workspace"
   | "notebook"
   | "flashcards"
   | "topik"
+  | "account-pro"
   | "ui-blueprint";
 
 export interface WordBreakdownItem {
@@ -49,6 +58,8 @@ export interface VocabularyEntry {
   contextStyle?: ContextStyle;
   createdAt: string;
   masteryLevel?: "learning" | "reviewing" | "mastered";
+  personalNote?: string;
+  isSelectedForGame?: boolean;
 }
 
 export interface SentenceCheckResult {
@@ -57,4 +68,20 @@ export interface SentenceCheckResult {
   koreanExplanation: string;
   vietnameseTranslation: string;
   feedbackVietnamese: string;
+}
+
+export interface UserProfileData {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL: string;
+  targetTopikLevel: TargetTopikGoal;
+  preferredContextStyle: ContextStyle;
+  dailyGoalWords: number;
+  streakDays: number;
+  totalLookups: number;
+  totalSentencesChecked: number;
+  totalGamesCleared: number;
+  subscriptionTier: SubscriptionTier;
+  lastStudyDate: string;
 }
