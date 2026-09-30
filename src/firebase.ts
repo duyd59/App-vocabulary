@@ -29,11 +29,52 @@ import {
   VocabularyEntry,
 } from "./types/vocabulary";
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const customFirebaseApiKey = (
+  import.meta.env?.VITE_FIREBASE_API_KEY ||
+  process.env.VITE_FIREBASE_API_KEY ||
+  ""
+).trim();
+
+const customProjectId =
+  (
+    import.meta.env?.VITE_FIREBASE_PROJECT_ID ||
+    process.env.VITE_FIREBASE_PROJECT_ID ||
+    ""
+  ).trim() || "appvocabulary-75d41";
+
+const resolvedFirebaseConfig = customFirebaseApiKey
+  ? {
+      ...firebaseConfig,
+      apiKey: customFirebaseApiKey,
+      projectId: customProjectId,
+      authDomain:
+        (
+          import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN ||
+          process.env.VITE_FIREBASE_AUTH_DOMAIN ||
+          ""
+        ).trim() || `${customProjectId}.firebaseapp.com`,
+      storageBucket: `${customProjectId}.firebasestorage.app`,
+      appId:
+        (
+          import.meta.env?.VITE_FIREBASE_APP_ID ||
+          process.env.VITE_FIREBASE_APP_ID ||
+          ""
+        ).trim() || firebaseConfig.appId,
+      firestoreDatabaseId: (
+        import.meta.env?.VITE_FIREBASE_DATABASE_ID ||
+        process.env.VITE_FIREBASE_DATABASE_ID ||
+        ""
+      ).trim(),
+    }
+  : firebaseConfig;
+
+const app = initializeApp(resolvedFirebaseConfig);
+export const db = resolvedFirebaseConfig.firestoreDatabaseId
+  ? getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId)
+  : getFirestore(app);
 export const auth = getAuth(app);
-export const activeFirebaseProjectId = firebaseConfig.projectId;
-export const activeFirebaseAuthDomain = firebaseConfig.authDomain;
+export const activeFirebaseProjectId = resolvedFirebaseConfig.projectId;
+export const activeFirebaseAuthDomain = resolvedFirebaseConfig.authDomain;
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: "select_account" });
 

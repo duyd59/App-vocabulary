@@ -38,6 +38,42 @@ export default defineConfig(({mode}) => {
     }
   }
 
+  const firebaseApiKey = (
+    process.env.VITE_FIREBASE_API_KEY ||
+    process.env.FIREBASE_API_KEY ||
+    env.VITE_FIREBASE_API_KEY ||
+    env.FIREBASE_API_KEY ||
+    ''
+  ).trim();
+  const firebaseProjectId = (
+    process.env.VITE_FIREBASE_PROJECT_ID ||
+    process.env.FIREBASE_PROJECT_ID ||
+    env.VITE_FIREBASE_PROJECT_ID ||
+    env.FIREBASE_PROJECT_ID ||
+    ''
+  ).trim();
+  const firebaseAuthDomain = (
+    process.env.VITE_FIREBASE_AUTH_DOMAIN ||
+    process.env.FIREBASE_AUTH_DOMAIN ||
+    env.VITE_FIREBASE_AUTH_DOMAIN ||
+    env.FIREBASE_AUTH_DOMAIN ||
+    ''
+  ).trim();
+  const firebaseAppId = (
+    process.env.VITE_FIREBASE_APP_ID ||
+    process.env.FIREBASE_APP_ID ||
+    env.VITE_FIREBASE_APP_ID ||
+    env.FIREBASE_APP_ID ||
+    ''
+  ).trim();
+  const firebaseDatabaseId = (
+    process.env.VITE_FIREBASE_DATABASE_ID ||
+    process.env.FIREBASE_DATABASE_ID ||
+    env.VITE_FIREBASE_DATABASE_ID ||
+    env.FIREBASE_DATABASE_ID ||
+    ''
+  ).trim();
+
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -45,6 +81,11 @@ export default defineConfig(({mode}) => {
       'process.env.VITE_GEMINI_API_KEY': JSON.stringify(geminiApiKey),
       'process.env.GOOGLE_API_KEY': JSON.stringify(geminiApiKey),
       'process.env.API_KEY': JSON.stringify(geminiApiKey),
+      'process.env.VITE_FIREBASE_API_KEY': JSON.stringify(firebaseApiKey),
+      'process.env.VITE_FIREBASE_PROJECT_ID': JSON.stringify(firebaseProjectId),
+      'process.env.VITE_FIREBASE_AUTH_DOMAIN': JSON.stringify(firebaseAuthDomain),
+      'process.env.VITE_FIREBASE_APP_ID': JSON.stringify(firebaseAppId),
+      'process.env.VITE_FIREBASE_DATABASE_ID': JSON.stringify(firebaseDatabaseId),
     },
     resolve: {
       alias: {
